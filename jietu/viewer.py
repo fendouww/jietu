@@ -4,13 +4,13 @@ from PyQt6.QtWidgets import (
     QWidget, QToolBar, QVBoxLayout, QInputDialog,
     QColorDialog, QLabel, QSizeGrip, QApplication
 )
-from PyQt6.QtCore import Qt, QPoint, QRect, QRectF, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QPixmap, QColor, QFont, QAction, QIcon,
+    QPainter, QPixmap, QImage, QColor, QFont, QAction, QIcon,
     QCursor, QPen
 )
 from PIL import Image
-import io
+import numpy as np
 
 from jietu.annotator import Annotation, Tool, render_annotation
 from jietu.translator import TranslateWorker
@@ -41,6 +41,8 @@ class PinnedViewer(QWidget):
 
         self._worker: TranslateWorker | None = None
         self._translating = False
+        self._has_translated = False
+        self._status = ""
 
         self._setup_ui()
 
@@ -205,6 +207,16 @@ class PinnedViewer(QWidget):
 
         painter.end()
 
+        # Status hint (e.g. "翻译中…") drawn in widget (unscaled) coords
+        if self._status:
+            sp = QPainter(self)
+            sp.fillRect(0, 0, self.width(), 26, QColor(0, 0, 0, 160))
+            sp.setPen(QColor(255, 255, 255))
+            sp.setFont(QFont("Microsoft YaHei", 11))
+            sp.drawText(QRect(0, 0, self.width(), 26),
+                        Qt.AlignmentFlag.AlignCenter, self._status)
+            sp.end()
+
     def _paint_translations(self, painter: QPainter):
         for (bbox, _orig, translated) in self._translations:
             xs = [p[0] for p in bbox]
@@ -328,35 +340,55 @@ class PinnedViewer(QWidget):
 
     def _start_translation(self):
         if self._translating:
-            # Toggle display if already done
+            return  # already running — ignore extra clicks
+        if self._has_translated:
+            # Already have results → toggle overlay on/off
             self._show_translation = not self._show_translation
             self.update()
             return
 
         self._translating = True
-        flat = self._render_flat()
+        self._status = "翻译中…（首次需加载模型，请稍候）"
+        self.update()
 
-        # Convert QPixmap → PIL Image
-        buf = flat.toImage()
-        buf.save("/tmp/_jietu_ocr.png") if False else None
-        arr = buf.bits().asarray(buf.width() * buf.height() * 4)
-        pil_img = Image.frombytes(
-            "RGBA", (buf.width(), buf.height()), bytes(arr), "raw", "BGRA"
-        ).convert("RGB")
+        pil_img = self._pixmap_to_pil(self._render_flat())
 
         self._worker = TranslateWorker(pil_img, target_lang="zh-CN")
         self._worker.finished.connect(self._on_translated)
         self._worker.error.connect(self._on_trans_error)
         self._worker.run()
 
+    @staticmethod
+    def _pixmap_to_pil(pixmap: QPixmap) -> Image.Image:
+        """Robust QPixmap → PIL.Image (handles row padding & format)."""
+        img = pixmap.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+        w, h = img.width(), img.height()
+        bpl = img.bytesPerLine()
+        ptr = img.constBits()
+        ptr.setsize(h * bpl)
+        arr = np.frombuffer(bytes(ptr), np.uint8).reshape(h, bpl // 4, 4)
+        arr = arr[:, :w, :3]  # drop padding columns and alpha → RGB
+        return Image.fromarray(arr, "RGB")
+
     def _on_translated(self, results: list):
         self._translations = results
         self._show_translation = True
         self._translating = False
+        self._has_translated = True
+        self._status = ""
+        if not results:
+            self._status = "未识别到文字"
+            QTimer.singleShot(2000, self._clear_status)
+        self.update()
+
+    def _clear_status(self):
+        self._status = ""
         self.update()
 
     def _on_trans_error(self, msg: str):
         self._translating = False
+        self._status = ""
+        self.update()
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(self, "翻译失败", msg)
 
