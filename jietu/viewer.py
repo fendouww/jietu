@@ -31,6 +31,7 @@ class PinnedViewer(QWidget):
         self._annotations: list[Annotation] = []
         self._translations: list[tuple] = []  # (bbox, text, translated)
         self._show_translation = False
+        self._pinned = True
 
         self._tool = Tool.SELECT
         self._color = QColor(255, 50, 50)
@@ -103,11 +104,14 @@ class PinnedViewer(QWidget):
 
         tb.addSeparator()
 
+        self._act_pin = act("📌", "钉住桌面（置顶）", True)
+        self._act_pin.setChecked(True)
         act_color  = act("🎨", "颜色")
         act_trans  = act("译", "OCR翻译")
         act_copy   = act("⎘", "复制图片")
         act_close  = act("✕", "关闭")
 
+        tb.addAction(self._act_pin)
         tb.addAction(act_color)
         tb.addAction(act_trans)
         tb.addAction(act_copy)
@@ -119,6 +123,7 @@ class PinnedViewer(QWidget):
         self._act_arrow.triggered.connect(lambda:  self._set_tool(Tool.ARROW))
         self._act_pen.triggered.connect(lambda:    self._set_tool(Tool.PEN))
         self._act_text.triggered.connect(lambda:   self._set_tool(Tool.TEXT))
+        self._act_pin.triggered.connect(self._toggle_pin)
         act_color.triggered.connect(self._pick_color)
         act_trans.triggered.connect(self._start_translation)
         act_copy.triggered.connect(self._copy_image)
@@ -139,6 +144,19 @@ class PinnedViewer(QWidget):
             Qt.CursorShape.ArrowCursor if tool == Tool.SELECT
             else Qt.CursorShape.CrossCursor
         )
+
+    def _toggle_pin(self):
+        self._pinned = self._act_pin.isChecked()
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+        )
+        if self._pinned:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        pos = self.pos()
+        self.setWindowFlags(flags)
+        self.move(pos)
+        self.show()
 
     def _pick_color(self):
         c = QColorDialog.getColor(self._color, self)
@@ -262,6 +280,14 @@ class PinnedViewer(QWidget):
             self.update()
 
     def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if event.pos().y() >= TOOLBAR_HEIGHT:
+                # Cancel any in-progress drawing stroke from the first click
+                self._drawing = None
+                self._drag_offset = None
+                self._copy_image()
+                self._on_close()
+                return
         if event.button() == Qt.MouseButton.RightButton:
             self._on_close()
 
