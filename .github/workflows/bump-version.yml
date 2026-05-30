@@ -1,0 +1,46 @@
+name: Auto bump version
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "pyproject.toml"   # avoid infinite loop when this workflow commits
+      - "jietu/__init__.py"
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          # Read current version from pyproject.toml
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          # Update pyproject.toml
+          sed -i "s/^version = \"$VERSION\"/version = \"$NEW_VERSION\"/" pyproject.toml
+
+          # Update jietu/__init__.py
+          sed -i "s/__version__ = \"$VERSION\"/__version__ = \"$NEW_VERSION\"/" jietu/__init__.py
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml jietu/__init__.py
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
+          git push

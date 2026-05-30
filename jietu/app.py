@@ -30,6 +30,10 @@ class App(QWidget):
         self._viewers: list[PinnedViewer] = []
         self._overlay: CaptureOverlay | None = None
 
+        self._updater = UpdateChecker()
+        self._updater.update_available.connect(self._on_update_available)
+        self._updater.update_done.connect(self._on_update_done)
+
         self._tray = QSystemTrayIcon(self)
         self._tray.setIcon(_default_icon())
         self._tray.setToolTip("截图工具 (jietu)")
@@ -40,9 +44,6 @@ class App(QWidget):
         shortcut = QShortcut(QKeySequence("Ctrl+`"), self)
         shortcut.activated.connect(self._start_capture)
 
-        self._updater = UpdateChecker()
-        self._updater.update_available.connect(self._on_update_available)
-        self._updater.update_done.connect(self._on_update_done)
         self._updater.check_async()
 
         self.hide()
