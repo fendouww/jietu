@@ -53,23 +53,23 @@ class PinnedViewer(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # Window must be sized in LOGICAL pixels.
-        # _base is stored as physical pixels with DPR set.
-        dpr = self._base.devicePixelRatio()
-        lw = int(self._base.width() / dpr)
-        lh = int(self._base.height() / dpr)
+        # _base is already in logical pixels (DPR=1), so width/height map 1:1.
+        lw, lh = self._base.width(), self._base.height()
         self.resize(lw, lh + TOOLBAR_HEIGHT)
 
+        # Toolbar sits at the BOTTOM, below the screenshot canvas.
         self._toolbar = self._build_toolbar()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._toolbar)
+        layout.addStretch(1)            # canvas area (painted manually)
+        layout.addWidget(self._toolbar)  # toolbar pinned to bottom
 
         grip = QSizeGrip(self)
         grip.resize(16, 16)
-        grip.move(lw - 16, lh + TOOLBAR_HEIGHT - 16)
+        grip.move(lw - 16, lh - 16)  # repositioned in resizeEvent
 
         self.setMinimumSize(80, 60 + TOOLBAR_HEIGHT)
 
@@ -169,7 +169,8 @@ class PinnedViewer(QWidget):
     # ── Paint ─────────────────────────────────────────────────────────────
 
     def _canvas_rect(self) -> QRect:
-        return QRect(0, TOOLBAR_HEIGHT, self.width(), self.height() - TOOLBAR_HEIGHT)
+        # Canvas is the top area; toolbar occupies the bottom TOOLBAR_HEIGHT px.
+        return QRect(0, 0, self.width(), self.height() - TOOLBAR_HEIGHT)
 
     def paintEvent(self, _event):
         painter = QPainter(self)
@@ -230,11 +231,14 @@ class PinnedViewer(QWidget):
         lp = pos - cr.topLeft()
         return QPoint(int(lp.x() * sx), int(lp.y() * sy))
 
+    def _in_canvas(self, pos: QPoint) -> bool:
+        return pos.y() < self.height() - TOOLBAR_HEIGHT
+
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         pos = event.pos()
-        if pos.y() < TOOLBAR_HEIGHT:
+        if not self._in_canvas(pos):
             return
 
         if self._tool == Tool.SELECT:
@@ -284,7 +288,7 @@ class PinnedViewer(QWidget):
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            if event.pos().y() >= TOOLBAR_HEIGHT:
+            if self._in_canvas(event.pos()):
                 # Cancel any in-progress drawing stroke from the first click
                 self._drawing = None
                 self._drag_offset = None
@@ -292,6 +296,10 @@ class PinnedViewer(QWidget):
                 self._on_close()
                 return
         if event.button() == Qt.MouseButton.RightButton:
+            self._on_close()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
             self._on_close()
 
     def contextMenuEvent(self, event):
@@ -304,17 +312,12 @@ class PinnedViewer(QWidget):
         QApplication.clipboard().setPixmap(pixmap)
 
     def _render_flat(self) -> QPixmap:
-        """Render base + annotations into one pixmap (physical pixel coords)."""
-        dpr = self._base.devicePixelRatio()
+        """Render base + annotations into one pixmap (logical pixel coords)."""
         result = self._base.copy()
-        # Reset DPR so QPainter works in physical pixel coordinates,
-        # matching the physical pixel coords stored in annotations.
-        result.setDevicePixelRatio(1.0)
         painter = QPainter(result)
         for ann in self._annotations:
             render_annotation(painter, ann)
         painter.end()
-        result.setDevicePixelRatio(dpr)
         return result
 
     def _start_translation(self):
@@ -357,7 +360,7 @@ class PinnedViewer(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Relocate grip
+        # Keep grip at the canvas bottom-right, just above the bottom toolbar.
         for child in self.children():
             if isinstance(child, QSizeGrip):
-                child.move(self.width() - 16, self.height() - 16)
+                child.move(self.width() - 16, self.height() - TOOLBAR_HEIGHT - 16)

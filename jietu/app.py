@@ -1,12 +1,13 @@
 """System tray application — entry point."""
 import sys
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget
-from PyQt6.QtGui import QAction, QIcon, QPixmap, QColor, QPainter, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QIcon, QPixmap, QColor, QPainter
 from PyQt6.QtCore import Qt, QRect
 
 from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
+from jietu.hotkey import GlobalHotkey
 import jietu.startup as startup
 
 
@@ -41,8 +42,10 @@ class App(QWidget):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
-        shortcut = QShortcut(QKeySequence("Ctrl+`"), self)
-        shortcut.activated.connect(self._start_capture)
+        # System-wide hotkey (works without focus). QShortcut would NOT.
+        self._hotkey = GlobalHotkey("<ctrl>+`")
+        self._hotkey.triggered.connect(self._start_capture)
+        self._hotkey.start()
 
         self._updater.check_async()
 

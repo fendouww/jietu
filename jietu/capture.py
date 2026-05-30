@@ -46,6 +46,7 @@ class CaptureOverlay(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # Position/size in logical pixels — covers all monitors
         screens = QGuiApplication.screens()
@@ -54,6 +55,10 @@ class CaptureOverlay(QWidget):
             total = total.united(s.geometry())
         self.setGeometry(total)
         self.showFullScreen()
+        # Grab keyboard/focus so Esc works immediately
+        self.activateWindow()
+        self.raise_()
+        self.setFocus()
 
     # ── Events ────────────────────────────────────────────────────────────────
 
@@ -76,7 +81,9 @@ class CaptureOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._origin:
             logical_rect = QRect(self._origin, event.pos()).normalized()
             if logical_rect.width() > 5 and logical_rect.height() > 5:
-                # Convert logical selection → physical pixels for cropping
+                # Crop physical pixels, then normalize to LOGICAL size (DPR=1).
+                # Everything downstream then works in plain logical pixels —
+                # no DPR math in the viewer at all.
                 dpr = self._dpr
                 phys = QRect(
                     int(logical_rect.x() * dpr),
@@ -85,8 +92,13 @@ class CaptureOverlay(QWidget):
                     int(logical_rect.height() * dpr),
                 )
                 cropped = self._screen_pixmap.copy(phys)
-                cropped.setDevicePixelRatio(dpr)
-                self.captured.emit(cropped, logical_rect)
+                display = cropped.scaled(
+                    logical_rect.width(), logical_rect.height(),
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                display.setDevicePixelRatio(1.0)
+                self.captured.emit(display, logical_rect)
             else:
                 self.cancelled.emit()
             self.close()
