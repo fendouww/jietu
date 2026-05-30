@@ -54,8 +54,12 @@ class PinnedViewer(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
 
-        w, h = self._base.width(), self._base.height()
-        self.resize(w, h + TOOLBAR_HEIGHT)
+        # Window must be sized in LOGICAL pixels.
+        # _base is stored as physical pixels with DPR set.
+        dpr = self._base.devicePixelRatio()
+        lw = int(self._base.width() / dpr)
+        lh = int(self._base.height() / dpr)
+        self.resize(lw, lh + TOOLBAR_HEIGHT)
 
         self._toolbar = self._build_toolbar()
         layout = QVBoxLayout(self)
@@ -63,10 +67,9 @@ class PinnedViewer(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._toolbar)
 
-        # Resize grip bottom-right
         grip = QSizeGrip(self)
         grip.resize(16, 16)
-        grip.move(w - 16, h + TOOLBAR_HEIGHT - 16)
+        grip.move(lw - 16, lh + TOOLBAR_HEIGHT - 16)
 
         self.setMinimumSize(80, 60 + TOOLBAR_HEIGHT)
 
@@ -301,12 +304,17 @@ class PinnedViewer(QWidget):
         QApplication.clipboard().setPixmap(pixmap)
 
     def _render_flat(self) -> QPixmap:
-        """Render base + annotations into one pixmap."""
+        """Render base + annotations into one pixmap (physical pixel coords)."""
+        dpr = self._base.devicePixelRatio()
         result = self._base.copy()
+        # Reset DPR so QPainter works in physical pixel coordinates,
+        # matching the physical pixel coords stored in annotations.
+        result.setDevicePixelRatio(1.0)
         painter = QPainter(result)
         for ann in self._annotations:
             render_annotation(painter, ann)
         painter.end()
+        result.setDevicePixelRatio(dpr)
         return result
 
     def _start_translation(self):
