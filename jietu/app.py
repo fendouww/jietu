@@ -42,10 +42,16 @@ class App(QWidget):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
-        # System-wide hotkey (works without focus). QShortcut would NOT.
-        self._hotkey = GlobalHotkey("<ctrl>+`")
+        # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
+        self._hotkey = GlobalHotkey("ctrl+`")
         self._hotkey.triggered.connect(self._start_capture)
-        self._hotkey.start()
+        if not self._hotkey.register():
+            self._tray.showMessage(
+                "快捷键被占用",
+                "Ctrl+` 已被其他程序独占，截图请点击托盘图标。",
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
 
         self._updater.check_async()
 
@@ -122,6 +128,11 @@ class App(QWidget):
             UpdateChecker.restart()
 
     def _quit(self):
+        # Release the exclusive hotkey before exiting.
+        try:
+            self._hotkey.unregister()
+        except Exception:
+            pass
         # Exit code 0 tells the watchdog this was intentional — don't restart.
         QApplication.instance().exit(0)
 
