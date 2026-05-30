@@ -1,14 +1,14 @@
 """System tray application — entry point."""
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget, QMessageBox
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QColor, QPainter, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QRect
 
 from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
+from jietu.updater import UpdateChecker
 
 
 def _default_icon() -> QIcon:
-    """Generate a simple colored square icon."""
     px = QPixmap(32, 32)
     px.fill(QColor(0, 0, 0, 0))
     painter = QPainter(px)
@@ -16,7 +16,6 @@ def _default_icon() -> QIcon:
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawRoundedRect(2, 2, 28, 28, 6, 6)
     painter.setPen(QColor(255, 255, 255))
-    painter.setFont(painter.font())
     painter.drawText(px.rect(), Qt.AlignmentFlag.AlignCenter, "截")
     painter.end()
     return QIcon(px)
@@ -35,14 +34,17 @@ class App(QWidget):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
-        # Global shortcut (within app focus): Ctrl+Shift+A
-        shortcut = QShortcut(QKeySequence("Ctrl+Shift+A"), self)
+        shortcut = QShortcut(QKeySequence("Ctrl+`"), self)
         shortcut.activated.connect(self._start_capture)
+
+        self._updater = UpdateChecker()
+        self._updater.update_available.connect(self._on_update_available)
+        self._updater.update_done.connect(self._on_update_done)
+        self._updater.check_async()
 
         self.hide()
 
     def show(self):
-        # Don't show the hidden root widget; tray is the UI
         pass
 
     def _build_menu(self) -> QMenu:
@@ -51,13 +53,18 @@ class App(QWidget):
             "QMenu { background:#2b2b2b; color:white; border:1px solid #555; }"
             "QMenu::item:selected { background:#444; }"
         )
-        act_capture = QAction("截图  Ctrl+Shift+A", self)
+        act_capture = QAction("截图  Ctrl+`", self)
         act_capture.triggered.connect(self._start_capture)
+
+        self._act_update = QAction("检查更新", self)
+        self._act_update.triggered.connect(self._updater.check_async)
 
         act_quit = QAction("退出", self)
         act_quit.triggered.connect(QApplication.quit)
 
         menu.addAction(act_capture)
+        menu.addSeparator()
+        menu.addAction(self._act_update)
         menu.addSeparator()
         menu.addAction(act_quit)
         return menu
@@ -83,3 +90,25 @@ class App(QWidget):
 
     def _on_capture_cancelled(self):
         self._overlay = None
+
+    def _on_update_available(self, new_version: str):
+        self._tray.showMessage(
+            "jietu 有新版本",
+            f"发现 v{new_version}，正在后台更新…",
+            QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+        self._act_update.setText("更新中…")
+        self._act_update.setEnabled(False)
+        self._updater.upgrade_async()
+
+    def _on_update_done(self):
+        self._act_update.setText("检查更新")
+        self._act_update.setEnabled(True)
+        self._tray.showMessage(
+            "jietu 更新完成",
+            "点击「重启」立即生效，或下次启动时自动使用新版本。",
+            QSystemTrayIcon.MessageIcon.Information,
+            5000,
+        )
+        self._tray.messageClicked.connect(UpdateChecker.restart)
