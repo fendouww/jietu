@@ -29,9 +29,9 @@ class App(QWidget):
         self._is_child = is_child  # if True, exit 0 on user quit so watchdog stops
         self._viewers: list[PinnedViewer] = []
         self._overlay: CaptureOverlay | None = None
+        self._pending_restart = False
 
         self._updater = UpdateChecker()
-        self._updater.update_available.connect(self._on_update_available)
         self._updater.update_done.connect(self._on_update_done)
 
         self._tray = QSystemTrayIcon(self)
@@ -67,7 +67,7 @@ class App(QWidget):
         self._act_autostart.triggered.connect(self._toggle_autostart)
 
         self._act_update = QAction("检查更新", self)
-        self._act_update.triggered.connect(self._updater.check_async)
+        self._act_update.triggered.connect(self._updater.force_check_async)
 
         act_quit = QAction("退出", self)
         act_quit.triggered.connect(self._quit)
@@ -106,35 +106,35 @@ class App(QWidget):
         self._overlay = None
         viewer = PinnedViewer(pixmap)
         viewer.move(rect.topLeft())
-        viewer.closed.connect(lambda v=viewer: self._viewers.remove(v))
+        viewer.closed.connect(lambda v=viewer: self._on_viewer_closed(v))
         viewer.show()
         self._viewers.append(viewer)
 
     def _on_capture_cancelled(self):
         self._overlay = None
 
+    def _on_viewer_closed(self, viewer: PinnedViewer):
+        self._viewers.remove(viewer)
+        if self._pending_restart and not self._viewers:
+            UpdateChecker.restart()
+
     def _quit(self):
         # Exit code 0 tells the watchdog this was intentional — don't restart.
         QApplication.instance().exit(0)
 
-    def _on_update_available(self, new_version: str):
-        self._tray.showMessage(
-            "jietu 有新版本",
-            f"发现 v{new_version}，正在后台更新…",
-            QSystemTrayIcon.MessageIcon.Information,
-            3000,
-        )
-        self._act_update.setText("更新中…")
-        self._act_update.setEnabled(False)
-        self._updater.upgrade_async()
-
-    def _on_update_done(self):
+    def _on_update_done(self, success: bool):
         self._act_update.setText("检查更新")
         self._act_update.setEnabled(True)
-        self._tray.showMessage(
-            "jietu 更新完成",
-            "点击通知立即重启生效。",
-            QSystemTrayIcon.MessageIcon.Information,
-            5000,
-        )
-        self._tray.messageClicked.connect(UpdateChecker.restart)
+        if not success:
+            return
+        if self._viewers:
+            # Screenshots are pinned — don't force-restart, notify instead
+            self._tray.showMessage(
+                "jietu 已更新",
+                "关闭所有截图后将自动重启生效。",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+            self._pending_restart = True
+        else:
+            UpdateChecker.restart()

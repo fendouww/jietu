@@ -4,12 +4,16 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
+from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 REPO = "fendouww/jietu"
 RAW_TOML_URL = f"https://raw.githubusercontent.com/{REPO}/master/pyproject.toml"
+CHECK_INTERVAL = 3600   # seconds between auto-checks (1 hour)
+_STAMP_FILE = Path.home() / ".jietu_update_check"
 
 
 def _parse_version(text: str) -> tuple[int, ...]:
@@ -28,51 +32,69 @@ def _fetch_remote_version() -> str | None:
         return None
 
 
+def _cooldown_ok() -> bool:
+    """Return True if enough time has passed since the last check."""
+    try:
+        last = float(_STAMP_FILE.read_text())
+        return time.time() - last >= CHECK_INTERVAL
+    except Exception:
+        return True  # file missing or unreadable → check now
+
+
+def _mark_checked():
+    try:
+        _STAMP_FILE.write_text(str(time.time()))
+    except Exception:
+        pass
+
+
 class UpdateChecker(QObject):
-    update_available = pyqtSignal(str)   # new version string
-    update_done = pyqtSignal()           # pip finished, ready to restart
+    update_done = pyqtSignal(bool)   # True = upgraded, False = already up-to-date or error
 
     def __init__(self):
         super().__init__()
         self._upgrading = False
 
     def check_async(self):
+        """Check only if the 1-hour cooldown has elapsed."""
+        if not _cooldown_ok():
+            return
+        threading.Thread(target=self._check, daemon=True).start()
+
+    def force_check_async(self):
+        """Check regardless of cooldown (user-triggered)."""
         threading.Thread(target=self._check, daemon=True).start()
 
     def _check(self):
+        _mark_checked()
         content = _fetch_remote_version()
         if not content:
             return
 
         from jietu import __version__
         local = _parse_version(f'version = "{__version__}"')
-        remote_str = re.search(r'version\s*=\s*"([^"]+)"', content)
-        if not remote_str:
-            return
         remote = _parse_version(content)
 
         if remote > local:
-            self.update_available.emit(remote_str.group(1))
+            self._upgrade()
 
-    def upgrade_async(self):
+    def _upgrade(self):
         if self._upgrading:
             return
         self._upgrading = True
-        threading.Thread(target=self._upgrade, daemon=True).start()
-
-    def _upgrade(self):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--upgrade", "--quiet",
                  f"git+https://github.com/{REPO}.git"],
-                check=True,
                 capture_output=True,
             )
+            success = result.returncode == 0
         except Exception:
-            pass
+            success = False
         finally:
             self._upgrading = False
-            self.update_done.emit()
+
+        self.update_done.emit(success)
 
     @staticmethod
     def restart():
