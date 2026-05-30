@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 jietu = "jietu.__main__:main"
+jietu-daemon = "jietu.watchdog:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["jietu"]

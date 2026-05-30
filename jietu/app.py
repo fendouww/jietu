@@ -1,11 +1,13 @@
 """System tray application — entry point."""
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget, QMessageBox
+import sys
+from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QColor, QPainter, QKeySequence, QShortcut
 from PyQt6.QtCore import Qt, QRect
 
 from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
+import jietu.startup as startup
 
 
 def _default_icon() -> QIcon:
@@ -22,8 +24,9 @@ def _default_icon() -> QIcon:
 
 
 class App(QWidget):
-    def __init__(self):
+    def __init__(self, is_child: bool = False):
         super().__init__()
+        self._is_child = is_child  # if True, exit 0 on user quit so watchdog stops
         self._viewers: list[PinnedViewer] = []
         self._overlay: CaptureOverlay | None = None
 
@@ -53,21 +56,39 @@ class App(QWidget):
             "QMenu { background:#2b2b2b; color:white; border:1px solid #555; }"
             "QMenu::item:selected { background:#444; }"
         )
+
         act_capture = QAction("截图  Ctrl+`", self)
         act_capture.triggered.connect(self._start_capture)
+
+        self._act_autostart = QAction("开机自动启动", self)
+        self._act_autostart.setCheckable(True)
+        self._act_autostart.setChecked(startup.is_enabled())
+        self._act_autostart.triggered.connect(self._toggle_autostart)
 
         self._act_update = QAction("检查更新", self)
         self._act_update.triggered.connect(self._updater.check_async)
 
         act_quit = QAction("退出", self)
-        act_quit.triggered.connect(QApplication.quit)
+        act_quit.triggered.connect(self._quit)
 
         menu.addAction(act_capture)
         menu.addSeparator()
+        menu.addAction(self._act_autostart)
         menu.addAction(self._act_update)
         menu.addSeparator()
         menu.addAction(act_quit)
         return menu
+
+    def _toggle_autostart(self):
+        try:
+            if self._act_autostart.isChecked():
+                startup.enable()
+            else:
+                startup.disable()
+        except Exception as e:
+            self._act_autostart.setChecked(not self._act_autostart.isChecked())
+            self._tray.showMessage("自启动设置失败", str(e),
+                                   QSystemTrayIcon.MessageIcon.Warning, 3000)
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -91,6 +112,10 @@ class App(QWidget):
     def _on_capture_cancelled(self):
         self._overlay = None
 
+    def _quit(self):
+        # Exit code 0 tells the watchdog this was intentional — don't restart.
+        QApplication.instance().exit(0)
+
     def _on_update_available(self, new_version: str):
         self._tray.showMessage(
             "jietu 有新版本",
@@ -107,7 +132,7 @@ class App(QWidget):
         self._act_update.setEnabled(True)
         self._tray.showMessage(
             "jietu 更新完成",
-            "点击「重启」立即生效，或下次启动时自动使用新版本。",
+            "点击通知立即重启生效。",
             QSystemTrayIcon.MessageIcon.Information,
             5000,
         )
