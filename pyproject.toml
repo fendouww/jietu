@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jietu"
+version = "0.1.0"
+description = "极简截图工具：钉住桌面、标注、OCR翻译"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6>=6.6",
+    "mss>=9.0",
+    "Pillow>=10.0",
+    "easyocr>=1.7",
+    "deep-translator>=1.11",
+]
+
+[project.scripts]
+jietu = "jietu.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["jietu"]
