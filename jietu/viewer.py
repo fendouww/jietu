@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QToolBar, QVBoxLayout, QInputDialog,
     QColorDialog, QLabel, QSizeGrip, QApplication
 )
-from PyQt6.QtCore import Qt, QPoint, QRect, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, QRectF, QSize, pyqtSignal
 from PyQt6.QtGui import (
     QPainter, QPixmap, QColor, QFont, QAction, QIcon,
     QCursor, QPen
@@ -55,8 +55,11 @@ class PinnedViewer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # _base is already in logical pixels (DPR=1), so width/height map 1:1.
-        lw, lh = self._base.width(), self._base.height()
+        # _base holds FULL physical-resolution pixels with DPR set.
+        # Window must be sized in LOGICAL pixels = physical / dpr.
+        dpr = self._base.devicePixelRatio() or 1.0
+        lw = round(self._base.width() / dpr)
+        lh = round(self._base.height() / dpr)
         self.resize(lw, lh + TOOLBAR_HEIGHT)
 
         # Toolbar sits at the BOTTOM, below the screenshot canvas.
@@ -174,17 +177,14 @@ class PinnedViewer(QWidget):
 
     def paintEvent(self, _event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         cr = self._canvas_rect()
 
-        # Scale base image to current widget size
-        scaled = self._base.scaled(
-            cr.width(), cr.height(),
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        painter.drawPixmap(cr.topLeft(), scaled)
+        # Map the full-res physical source rect into the logical canvas rect.
+        # On a HiDPI backing store Qt renders at full device resolution → crisp.
+        painter.drawPixmap(QRectF(cr), self._base, QRectF(self._base.rect()))
 
-        # Scale factor for annotations (original coords → display coords)
+        # Annotations are stored in physical-pixel image coords.
         sx = cr.width()  / self._base.width()
         sy = cr.height() / self._base.height()
 
@@ -312,8 +312,14 @@ class PinnedViewer(QWidget):
         QApplication.clipboard().setPixmap(pixmap)
 
     def _render_flat(self) -> QPixmap:
-        """Render base + annotations into one pixmap (logical pixel coords)."""
+        """Render base + annotations at full physical resolution (DPR=1).
+
+        Annotations are in physical-pixel coords, so painting onto the
+        physical-size pixmap with DPR reset to 1 lines them up exactly.
+        The result carries every captured pixel — crisp clipboard + best OCR.
+        """
         result = self._base.copy()
+        result.setDevicePixelRatio(1.0)
         painter = QPainter(result)
         for ann in self._annotations:
             render_annotation(painter, ann)

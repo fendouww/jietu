@@ -81,9 +81,9 @@ class CaptureOverlay(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._origin:
             logical_rect = QRect(self._origin, event.pos()).normalized()
             if logical_rect.width() > 5 and logical_rect.height() > 5:
-                # Crop physical pixels, then normalize to LOGICAL size (DPR=1).
-                # Everything downstream then works in plain logical pixels —
-                # no DPR math in the viewer at all.
+                # Crop at FULL physical resolution (keep all pixels for crisp
+                # image + better OCR). Set DPR so the viewer knows the logical
+                # size; the image itself stays high-res.
                 dpr = self._dpr
                 phys = QRect(
                     int(logical_rect.x() * dpr),
@@ -92,13 +92,8 @@ class CaptureOverlay(QWidget):
                     int(logical_rect.height() * dpr),
                 )
                 cropped = self._screen_pixmap.copy(phys)
-                display = cropped.scaled(
-                    logical_rect.width(), logical_rect.height(),
-                    Qt.AspectRatioMode.IgnoreAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                display.setDevicePixelRatio(1.0)
-                self.captured.emit(display, logical_rect)
+                cropped.setDevicePixelRatio(dpr)
+                self.captured.emit(cropped, logical_rect)
             else:
                 self.cancelled.emit()
             self.close()
