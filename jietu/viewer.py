@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QPainter, QPixmap, QImage, QColor, QFont, QAction, QIcon,
+    QPainter, QPixmap, QImage, QColor, QFont, QFontMetrics, QAction, QIcon,
     QCursor, QPen
 )
 from PIL import Image
@@ -228,11 +228,21 @@ class PinnedViewer(QWidget):
             # White background block
             painter.fillRect(x, y, w, h, QColor(255, 255, 255, 230))
 
-            font_size = max(10, int(h * 0.65))
-            font = QFont("Microsoft YaHei, Arial", font_size)
+            # Match the ORIGINAL text height: start from the box height, then
+            # shrink only if the translation would overflow the box width.
+            font = QFont("Microsoft YaHei")
+            size = max(8, int(h * 0.82))
+            font.setPixelSize(size)
+            fm = QFontMetrics(font)
+            while size > 8 and fm.horizontalAdvance(translated) > w:
+                size -= 1
+                font.setPixelSize(size)
+                fm = QFontMetrics(font)
+
             painter.setFont(font)
             painter.setPen(QColor(20, 20, 20))
-            painter.drawText(QRect(x, y, w, h), Qt.AlignmentFlag.AlignCenter, translated)
+            painter.drawText(QRect(x, y, w, h),
+                             Qt.AlignmentFlag.AlignCenter, translated)
 
     # ── Mouse events ──────────────────────────────────────────────────────
 
