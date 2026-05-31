@@ -2,45 +2,107 @@
 
 极简截图工具，支持 macOS / Windows。
 
-- 截图区域选择，钉住桌面（始终置顶）
-- 矩形、箭头、画笔、文字标注
-- OCR 识别 + 原位翻译（中英互译）
+- 截图区域选择，钉住桌面（始终置顶），多屏支持
+- 矩形、箭头、画笔、文字标注 —— 可拖动、可缩放、文字就地编辑
+- OCR 识别 + 原位翻译（中英），译文按背景色融合、整句翻译
+- 全局快捷键、托盘菜单、开机自启、守护进程、一键安全升级
 
-## 安装（一条命令）
+> 前置：先装好 **Python 3.10+** 和 **Git**。
 
-```bash
-pip install git+https://github.com/YOUR_USERNAME/jietu.git
+---
+
+## 🪟 Windows
+
+**安装**（自动安装所有依赖，含 easyocr + torch，约 2.5GB，请耐心等到出现 `Successfully installed`）
+
+```powershell
+python -m pip install "git+https://github.com/fendouww/jietu.git"
 ```
 
-> 首次运行 OCR 会自动下载模型（~300MB），之后离线可用。
+**静默启动**（无控制台窗口 + 守护进程，崩溃自动重启）
 
-## 升级
-
-直接双击仓库里的 **`升级.bat`**（或运行 `update.ps1`）。它会自动：先终止正在运行的 jietu（含守护进程，防止文件被占用导致安装失败）→ 升级到最新版 → 静默重启。
-
-> 不要在 jietu 运行时手动 `pip install --force-reinstall`，正在运行的程序文件被锁，安装会失败。
-
-## 运行
-
-```bash
-jietu
+```powershell
+pythonw -m jietu.watchdog
 ```
 
-启动后系统托盘出现图标（Windows 右下角 / macOS 菜单栏）。
+> 若 `python` / `pythonw` 输入后没有任何反应，是被微软商店占位程序拦截了。改用真 Python 的完整路径，例如：
+> ```powershell
+> & "C:\Users\你的用户名\AppData\Local\Programs\Python\Python311\pythonw.exe" -m jietu.watchdog
+> ```
+> 或：设置 → 应用 → 高级应用设置 → 应用执行别名 → 关掉 `python.exe` / `python3.exe`。
+
+---
+
+## 🍎 macOS
+
+**安装**（自动安装所有依赖；Mac 使用系统 Vision OCR，无需 torch，安装很快）
+
+```bash
+pip3 install "git+https://github.com/fendouww/jietu.git"
+```
+
+**静默启动**（后台运行，不占用终端 + 守护进程自动重启）
+
+```bash
+nohup python3 -m jietu.watchdog >/dev/null 2>&1 &
+```
+
+**首次必做 —— 开启两个系统权限**（否则截图黑屏 / 快捷键无效）：
+
+- 系统设置 → 隐私与安全性 → **屏幕录制** → 勾选「终端」
+- 系统设置 → 隐私与安全性 → **辅助功能** → 勾选「终端」
+
+---
 
 ## 使用
 
 | 操作 | 说明 |
 |------|------|
-| 单击托盘图标 | 开始截图 |
-| `Ctrl+Shift+A` | 快捷键截图 |
-| 拖动截图窗口 | 移动位置 |
-| 工具栏 `□ → ✏ T` | 矩形 / 箭头 / 画笔 / 文字标注 |
-| 工具栏 `译` | OCR 识别并原位翻译 |
-| 工具栏 `⎘` | 复制图片到剪贴板 |
-| 工具栏 `✕` | 关闭当前截图 |
-| 右键截图 | 关闭当前截图 |
+| `Ctrl+\`` 或点击托盘 / 菜单栏图标 | 开始截图 |
+| 截图时拖动选区 | 框选区域，`Esc` 取消 |
+| 工具栏 `↖ □ → ✏ T` | 选择 / 矩形 / 箭头 / 画笔 / 文字 |
+| 选择工具下点击标注 | 选中后可拖动、拖角缩放，`Delete` 删除 |
+| 文字工具点击图上 | 直接就地输入（双击已有文字可重新编辑） |
+| 工具栏 `📌` | 钉住 / 取消置顶 |
+| 工具栏 `译` | OCR 识别并原位翻译（再点切换显隐） |
+| 工具栏 `⎘` / 双击空白 | 复制图片到剪贴板（双击同时关闭） |
+| 工具栏 `✕` / `Esc` / 右键 | 关闭当前截图 |
+| 拖动截图空白处 | 移动窗口位置 |
 
-## 依赖
+托盘菜单：**开机自动启动**、**检查更新**、**升级到最新版**、**退出**。
 
-纯 pip 安装，无需额外系统软件。
+> 首次点「译」会下载 OCR 模型（Windows ~300MB；Mac 使用系统自带，无需下载）。
+
+---
+
+## 升级
+
+托盘菜单点 **「升级到最新版」** 即可（自动停止旧进程 → 重装 → 静默重启，跨平台通用）。
+
+也可命令行：
+
+```powershell
+# Windows
+python -m pip install --upgrade --force-reinstall --no-deps "git+https://github.com/fendouww/jietu.git"
+```
+
+```bash
+# macOS
+pip3 install --upgrade --force-reinstall --no-deps "git+https://github.com/fendouww/jietu.git"
+```
+
+> 升级前请先关闭正在运行的 jietu（或直接用托盘「升级到最新版」，它会自动处理）。Windows 用户也可双击仓库内的 `升级.bat`。
+
+---
+
+## 最简记忆版
+
+```bash
+# Windows
+python -m pip install "git+https://github.com/fendouww/jietu.git"   # 安装
+pythonw -m jietu.watchdog                                            # 启动（静默）
+
+# macOS
+pip3 install "git+https://github.com/fendouww/jietu.git"            # 安装
+nohup python3 -m jietu.watchdog >/dev/null 2>&1 &                   # 启动（静默）
+```
