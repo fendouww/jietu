@@ -224,16 +224,24 @@ class PinnedViewer(QWidget):
             x, y = int(min(xs)), int(min(ys))
             w = int(max(xs) - min(xs))
             h = int(max(ys) - min(ys))
+            if w <= 0 or h <= 0 or not translated:
+                continue
 
-            # White background block
-            painter.fillRect(x, y, w, h, QColor(255, 255, 255, 230))
+            # Cover the original text exactly with its bbox.
+            painter.fillRect(x, y, w, h, QColor(255, 255, 255, 235))
 
-            # Match the ORIGINAL text height: start from the box height, then
-            # shrink only if the translation would overflow the box width.
+            # Size the font so the glyph height matches the ORIGINAL line height,
+            # then shrink only if the translation would overflow the box width.
             font = QFont("Microsoft YaHei")
-            size = max(8, int(h * 0.82))
+            size = max(8, h)
             font.setPixelSize(size)
             fm = QFontMetrics(font)
+            # Match height: reduce until the font's text height fits the box.
+            while size > 8 and fm.height() > h:
+                size -= 1
+                font.setPixelSize(size)
+                fm = QFontMetrics(font)
+            # Match width: reduce until the translation fits horizontally.
             while size > 8 and fm.horizontalAdvance(translated) > w:
                 size -= 1
                 font.setPixelSize(size)
@@ -241,8 +249,12 @@ class PinnedViewer(QWidget):
 
             painter.setFont(font)
             painter.setPen(QColor(20, 20, 20))
-            painter.drawText(QRect(x, y, w, h),
-                             Qt.AlignmentFlag.AlignCenter, translated)
+            # Left-aligned to the original x, vertically centered → same position.
+            painter.drawText(
+                QRect(x, y, w, h),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                translated,
+            )
 
     # ── Mouse events ──────────────────────────────────────────────────────
 
