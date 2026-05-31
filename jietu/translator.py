@@ -1,14 +1,36 @@
-"""OCR + in-place translation using easyocr and deep-translator."""
+"""OCR + in-place translation.
+
+OCR backend is chosen by platform:
+  macOS → native Vision framework via `ocrmac` (fast, no torch)
+  others → easyocr (CPU/GPU)
+"""
 from __future__ import annotations
+import sys
 import threading
 from PyQt6.QtCore import QObject, pyqtSignal
 from PIL import Image
 import numpy as np
 
-# ── Cached OCR reader (load the model ONCE, reuse for every translation) ──────
+# ── OCR backend selection ────────────────────────────────────────────────────
 _READER = None
 _READER_LOCK = threading.Lock()
 _LANGS = ["en", "ch_sim"]
+_BACKEND = None
+
+
+def _backend() -> str:
+    """'mac' (Vision) or 'easyocr'."""
+    global _BACKEND
+    if _BACKEND is None:
+        if sys.platform == "darwin":
+            try:
+                import ocrmac  # noqa: F401
+                _BACKEND = "mac"
+            except Exception:
+                _BACKEND = "easyocr"
+        else:
+            _BACKEND = "easyocr"
+    return _BACKEND
 
 
 def _gpu_available() -> bool:
@@ -34,8 +56,38 @@ def get_reader():
 
 
 def preload():
-    """Warm up the OCR model in the background so the first translation is fast."""
-    threading.Thread(target=get_reader, daemon=True).start()
+    """Warm up the OCR model in the background (easyocr only; mac Vision is instant)."""
+    if _backend() == "easyocr":
+        threading.Thread(target=get_reader, daemon=True).start()
+
+
+def _run_ocr(image: Image.Image):
+    """Return easyocr-style results: list of (bbox_points, text, conf)."""
+    if _backend() == "mac":
+        return _ocr_mac(image)
+    reader = get_reader()
+    return reader.readtext(np.array(image))
+
+
+def _ocr_mac(image: Image.Image):
+    """macOS Vision OCR via ocrmac → easyocr-style boxes (top-left, pixels)."""
+    from ocrmac import ocrmac
+    W, H = image.size
+    out = []
+    annotations = ocrmac.OCR(
+        image, recognition_level="accurate",
+        language_preference=["en-US", "zh-Hans"],
+    ).recognize()
+    for text, conf, (x, y, w, h) in annotations:
+        # ocrmac boxes are normalized (0-1), origin bottom-left.
+        px0 = x * W
+        pw = w * W
+        ph = h * H
+        py0 = (1.0 - y - h) * H
+        bbox = [[px0, py0], [px0 + pw, py0],
+                [px0 + pw, py0 + ph], [px0, py0 + ph]]
+        out.append((bbox, text, conf))
+    return out
 
 
 class TranslateWorker(QObject):
@@ -56,9 +108,7 @@ class TranslateWorker(QObject):
         try:
             from deep_translator import GoogleTranslator
 
-            reader = get_reader()   # cached — no per-call model reload
-            img_np = np.array(self._image)
-            results = reader.readtext(img_np)
+            results = _run_ocr(self._image)
 
             # Merge word/line fragments into full-line segments so each
             # translation has sentence context (no more isolated words).

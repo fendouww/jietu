@@ -12,9 +12,14 @@ dependencies = [
     "PyQt6>=6.6",
     "mss>=9.0",
     "Pillow>=10.0",
-    "easyocr>=1.7",
     "deep-translator>=1.11",
     "pynput>=1.7",
+    # OCR backend is platform-specific:
+    #   Windows/Linux → easyocr (uses torch, which has wheels there)
+    #   macOS → ocrmac (native Vision framework, no torch — torch has no
+    #           Intel-Mac / py3.13 wheels)
+    "easyocr>=1.7; platform_system != 'Darwin'",
+    "ocrmac>=0.9; platform_system == 'Darwin'",
 ]
 
 [project.scripts]
