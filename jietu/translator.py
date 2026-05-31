@@ -11,6 +11,15 @@ _READER_LOCK = threading.Lock()
 _LANGS = ["en", "ch_sim"]
 
 
+def _gpu_available() -> bool:
+    """True if a CUDA GPU is usable (falls back to CPU otherwise)."""
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def get_reader():
     """Return a shared easyocr.Reader, building it on first use (thread-safe)."""
     global _READER
@@ -18,7 +27,9 @@ def get_reader():
         with _READER_LOCK:
             if _READER is None:
                 import easyocr
-                _READER = easyocr.Reader(_LANGS, gpu=False, verbose=False)
+                _READER = easyocr.Reader(
+                    _LANGS, gpu=_gpu_available(), verbose=False
+                )
     return _READER
 
 

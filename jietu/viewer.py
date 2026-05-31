@@ -218,6 +218,7 @@ class PinnedViewer(QWidget):
             sp.end()
 
     def _paint_translations(self, painter: QPainter):
+        base_img = self._base.toImage()
         for (bbox, _orig, translated) in self._translations:
             xs = [p[0] for p in bbox]
             ys = [p[1] for p in bbox]
@@ -227,9 +228,14 @@ class PinnedViewer(QWidget):
             if w <= 0 or h <= 0 or not translated:
                 continue
 
-            # Semi-transparent white backing: original text faintly shows
-            # through for reference, translation stays clearly readable.
-            painter.fillRect(x, y, w, h, QColor(255, 255, 255, 150))
+            # Fill with the ORIGINAL background color sampled from the image
+            # around this text → blends in and fully hides the source text.
+            bg = self._sample_bg(base_img, x, y, w, h)
+            painter.fillRect(x, y, w, h, bg)
+
+            # Pick a text color that contrasts with that background.
+            lum = 0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()
+            text_color = QColor(30, 30, 30) if lum > 140 else QColor(235, 235, 235)
 
             # Size the font so the glyph height matches the ORIGINAL line height,
             # then shrink only if the translation would overflow the box width.
@@ -237,25 +243,52 @@ class PinnedViewer(QWidget):
             size = max(8, h)
             font.setPixelSize(size)
             fm = QFontMetrics(font)
-            # Match height: reduce until the font's text height fits the box.
             while size > 8 and fm.height() > h:
                 size -= 1
                 font.setPixelSize(size)
                 fm = QFontMetrics(font)
-            # Match width: reduce until the translation fits horizontally.
             while size > 8 and fm.horizontalAdvance(translated) > w:
                 size -= 1
                 font.setPixelSize(size)
                 fm = QFontMetrics(font)
 
             painter.setFont(font)
-            painter.setPen(QColor(20, 20, 20))
+            painter.setPen(text_color)
             # Left-aligned to the original x, vertically centered → same position.
             painter.drawText(
                 QRect(x, y, w, h),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 translated,
             )
+
+    @staticmethod
+    def _sample_bg(img: QImage, x: int, y: int, w: int, h: int) -> QColor:
+        """Estimate the background color from the border pixels of a box.
+
+        Text usually sits in the center, so the box perimeter is mostly
+        background. Take the median of perimeter samples for robustness.
+        """
+        iw, ih = img.width(), img.height()
+        pts = []
+        sx = max(1, w // 10)
+        sy = max(1, h // 6)
+        for px in range(x, x + w, sx):
+            pts.append((px, y))
+            pts.append((px, y + h - 1))
+        for py in range(y, y + h, sy):
+            pts.append((x, py))
+            pts.append((x + w - 1, py))
+
+        rs, gs, bs = [], [], []
+        for px, py in pts:
+            if 0 <= px < iw and 0 <= py < ih:
+                c = img.pixelColor(px, py)
+                rs.append(c.red()); gs.append(c.green()); bs.append(c.blue())
+        if not rs:
+            return QColor(255, 255, 255)
+        rs.sort(); gs.sort(); bs.sort()
+        m = len(rs) // 2
+        return QColor(rs[m], gs[m], bs[m])
 
     # ── Mouse events ──────────────────────────────────────────────────────
 
