@@ -227,8 +227,9 @@ class PinnedViewer(QWidget):
             if w <= 0 or h <= 0 or not translated:
                 continue
 
-            # Cover the original text exactly with its bbox.
-            painter.fillRect(x, y, w, h, QColor(255, 255, 255, 235))
+            # Semi-transparent white backing: original text faintly shows
+            # through for reference, translation stays clearly readable.
+            painter.fillRect(x, y, w, h, QColor(255, 255, 255, 150))
 
             # Size the font so the glyph height matches the ORIGINAL line height,
             # then shrink only if the translation would overflow the box width.
