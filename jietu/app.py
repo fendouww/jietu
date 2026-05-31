@@ -9,6 +9,7 @@ from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
 from jietu.hotkey import GlobalHotkey
 from jietu import translator
+from jietu import upgrade
 import jietu.startup as startup
 
 
@@ -33,8 +34,10 @@ class App(QWidget):
         self._overlay: CaptureOverlay | None = None
         self._pending_restart = False
 
+        self._upgrading = False
         self._updater = UpdateChecker()
-        self._updater.update_done.connect(self._on_update_done)
+        self._updater.upgrade_requested.connect(self._do_upgrade)
+        self._updater.up_to_date.connect(self._on_up_to_date)
 
         self._tray = QSystemTrayIcon(self)
         self._tray.setIcon(_default_icon())
@@ -80,8 +83,11 @@ class App(QWidget):
         self._act_autostart.setChecked(startup.is_enabled())
         self._act_autostart.triggered.connect(self._toggle_autostart)
 
-        self._act_update = QAction("检查更新", self)
-        self._act_update.triggered.connect(self._updater.force_check_async)
+        self._act_check = QAction("检查更新", self)
+        self._act_check.triggered.connect(self._updater.manual_check_async)
+
+        self._act_upgrade = QAction("升级到最新版", self)
+        self._act_upgrade.triggered.connect(self._updater.manual_upgrade)
 
         act_quit = QAction("退出", self)
         act_quit.triggered.connect(self._quit)
@@ -89,7 +95,8 @@ class App(QWidget):
         menu.addAction(act_capture)
         menu.addSeparator()
         menu.addAction(self._act_autostart)
-        menu.addAction(self._act_update)
+        menu.addAction(self._act_check)
+        menu.addAction(self._act_upgrade)
         menu.addSeparator()
         menu.addAction(act_quit)
         return menu
@@ -130,7 +137,7 @@ class App(QWidget):
     def _on_viewer_closed(self, viewer: PinnedViewer):
         self._viewers.remove(viewer)
         if self._pending_restart and not self._viewers:
-            UpdateChecker.restart()
+            self._launch_upgrade()
 
     def _quit(self):
         # Release the exclusive hotkey before exiting.
@@ -141,19 +148,45 @@ class App(QWidget):
         # Exit code 0 tells the watchdog this was intentional — don't restart.
         QApplication.instance().exit(0)
 
-    def _on_update_done(self, success: bool):
-        self._act_update.setText("检查更新")
-        self._act_update.setEnabled(True)
-        if not success:
+    def _on_up_to_date(self):
+        self._tray.showMessage(
+            "jietu", "已是最新版本。",
+            QSystemTrayIcon.MessageIcon.Information, 2500,
+        )
+
+    def _do_upgrade(self, version: str):
+        """Start the detached upgrader (kills running jietu, reinstalls, restarts)."""
+        if self._upgrading:
             return
+        self._upgrading = True
         if self._viewers:
-            # Screenshots are pinned — don't force-restart, notify instead
-            self._tray.showMessage(
-                "jietu 已更新",
-                "关闭所有截图后将自动重启生效。",
-                QSystemTrayIcon.MessageIcon.Information,
-                4000,
-            )
+            # Don't interrupt pinned screenshots — upgrade after they're closed.
             self._pending_restart = True
-        else:
-            UpdateChecker.restart()
+            self._tray.showMessage(
+                "jietu 有新版本",
+                "关闭所有截图后将自动升级并重启。",
+                QSystemTrayIcon.MessageIcon.Information, 4000,
+            )
+            self._upgrading = False
+            return
+
+        msg = f"正在升级到 v{version}…" if version else "正在升级到最新版…"
+        self._tray.showMessage("jietu 升级", msg + "稍后自动重启。",
+                               QSystemTrayIcon.MessageIcon.Information, 4000)
+        self._launch_upgrade()
+
+    def _launch_upgrade(self):
+        # Spawn the detached upgrader, release the hotkey, then quit so the
+        # upgrader can replace the locked files and relaunch us.
+        try:
+            upgrade.spawn_detached()
+        except Exception as e:
+            self._tray.showMessage("升级失败", str(e),
+                                   QSystemTrayIcon.MessageIcon.Warning, 4000)
+            self._upgrading = False
+            return
+        try:
+            self._hotkey.unregister()
+        except Exception:
+            pass
+        QApplication.instance().exit(0)

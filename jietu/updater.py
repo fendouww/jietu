@@ -1,8 +1,11 @@
-"""Auto-update: check GitHub for newer version and upgrade via pip."""
+"""Auto-update: check GitHub for a newer version and request a safe upgrade.
+
+The actual upgrade is performed by a detached process (jietu.upgrade) that
+terminates the running app first, so files don't stay locked. This module only
+detects new versions and signals the app to start that process.
+"""
 from __future__ import annotations
 import re
-import subprocess
-import sys
 import threading
 import time
 import urllib.request
@@ -23,7 +26,7 @@ def _parse_version(text: str) -> tuple[int, ...]:
     return tuple(int(x) for x in m.group(1).split("."))
 
 
-def _fetch_remote_version() -> str | None:
+def _fetch_remote_toml() -> str | None:
     try:
         req = urllib.request.Request(RAW_TOML_URL, headers={"User-Agent": "jietu-updater"})
         with urllib.request.urlopen(req, timeout=8) as resp:
@@ -33,12 +36,11 @@ def _fetch_remote_version() -> str | None:
 
 
 def _cooldown_ok() -> bool:
-    """Return True if enough time has passed since the last check."""
     try:
         last = float(_STAMP_FILE.read_text())
         return time.time() - last >= CHECK_INTERVAL
     except Exception:
-        return True  # file missing or unreadable → check now
+        return True
 
 
 def _mark_checked():
@@ -49,54 +51,43 @@ def _mark_checked():
 
 
 class UpdateChecker(QObject):
-    update_done = pyqtSignal(bool)   # True = upgraded, False = already up-to-date or error
+    # Emitted (on the Qt thread) when an upgrade should run.
+    # arg = new version string, or "" for a forced/manual upgrade.
+    upgrade_requested = pyqtSignal(str)
+    up_to_date = pyqtSignal()   # manual check found nothing newer
 
     def __init__(self):
         super().__init__()
-        self._upgrading = False
 
     def check_async(self):
-        """Check only if the 1-hour cooldown has elapsed."""
+        """Auto check, gated by the 1-hour cooldown."""
         if not _cooldown_ok():
             return
-        threading.Thread(target=self._check, daemon=True).start()
+        threading.Thread(target=self._check, args=(False,), daemon=True).start()
 
-    def force_check_async(self):
-        """Check regardless of cooldown (user-triggered)."""
-        threading.Thread(target=self._check, daemon=True).start()
+    def manual_upgrade(self):
+        """User clicked 升级 — always upgrade (force-reinstall latest)."""
+        self.upgrade_requested.emit("")
 
-    def _check(self):
+    def manual_check_async(self):
+        """User clicked 检查更新 — check now, upgrade only if newer."""
+        threading.Thread(target=self._check, args=(True,), daemon=True).start()
+
+    def _check(self, manual: bool):
         _mark_checked()
-        content = _fetch_remote_version()
+        content = _fetch_remote_toml()
         if not content:
+            if manual:
+                self.up_to_date.emit()
             return
 
         from jietu import __version__
         local = _parse_version(f'version = "{__version__}"')
         remote = _parse_version(content)
+        m = re.search(r'version\s*=\s*"([^"]+)"', content)
+        remote_str = m.group(1) if m else ""
 
         if remote > local:
-            self._upgrade()
-
-    def _upgrade(self):
-        if self._upgrading:
-            return
-        self._upgrading = True
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--upgrade", "--quiet",
-                 f"git+https://github.com/{REPO}.git"],
-                capture_output=True,
-            )
-            success = result.returncode == 0
-        except Exception:
-            success = False
-        finally:
-            self._upgrading = False
-
-        self.update_done.emit(success)
-
-    @staticmethod
-    def restart():
-        import os
-        os.execv(sys.executable, [sys.executable, "-m", "jietu"])
+            self.upgrade_requested.emit(remote_str)
+        elif manual:
+            self.up_to_date.emit()
