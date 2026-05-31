@@ -94,7 +94,11 @@ class CaptureOverlay(QWidget):
                 phys = self._to_physical(logical_rect)
                 cropped = self._screen_pixmap.copy(phys)
                 cropped.setDevicePixelRatio(self._scale_x)
-                self.captured.emit(cropped, logical_rect)
+                # Crop uses overlay-local coords; the viewer needs GLOBAL screen
+                # coords to position itself (virtual desktop origin may be != 0,0
+                # when a monitor sits left of / above the primary).
+                global_rect = logical_rect.translated(self._virtual.topLeft())
+                self.captured.emit(cropped, global_rect)
             else:
                 self.cancelled.emit()
             self.close()
