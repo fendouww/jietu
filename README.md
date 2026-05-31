@@ -14,6 +14,12 @@ pip install git+https://github.com/YOUR_USERNAME/jietu.git
 
 > 首次运行 OCR 会自动下载模型（~300MB），之后离线可用。
 
+## 升级
+
+直接双击仓库里的 **`升级.bat`**（或运行 `update.ps1`）。它会自动：先终止正在运行的 jietu（含守护进程，防止文件被占用导致安装失败）→ 升级到最新版 → 静默重启。
+
+> 不要在 jietu 运行时手动 `pip install --force-reinstall`，正在运行的程序文件被锁，安装会失败。
+
 ## 运行
 
 ```bash
