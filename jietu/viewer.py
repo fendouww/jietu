@@ -39,6 +39,15 @@ class PinnedViewer(QWidget):
         self._drawing: Annotation | None = None
         self._drag_offset: QPoint | None = None
 
+        # Selection / editing state
+        self._selected: Annotation | None = None
+        self._interaction = None          # 'move' | 'resize' | 'window' | None
+        self._resize_idx = -1             # which corner handle (0..3)
+        self._press_widget: QPoint | None = None
+        self._orig_bounds: QRect | None = None
+        self._editor = None               # inline QLineEdit while typing text
+        self._editing_ann: Annotation | None = None
+
         self._worker: TranslateWorker | None = None
         self._translating = False
         self._has_translated = False
@@ -142,7 +151,10 @@ class PinnedViewer(QWidget):
     # ── Tool selection ────────────────────────────────────────────────────
 
     def _set_tool(self, tool: Tool):
+        self._commit_editor()
         self._tool = tool
+        if tool != Tool.SELECT:
+            self._selected = None      # hide handles while drawing
         for a, t in zip(
             self._tool_actions,
             [Tool.SELECT, Tool.RECT, Tool.ARROW, Tool.PEN, Tool.TEXT],
@@ -152,6 +164,7 @@ class PinnedViewer(QWidget):
             Qt.CursorShape.ArrowCursor if tool == Tool.SELECT
             else Qt.CursorShape.CrossCursor
         )
+        self.update()
 
     def _toggle_pin(self):
         self._pinned = self._act_pin.isChecked()
@@ -206,6 +219,19 @@ class PinnedViewer(QWidget):
             self._paint_translations(painter)
 
         painter.end()
+
+        # Selection overlay (bounding box + corner handles) in widget coords
+        if self._selected is not None and self._editor is None:
+            sp = QPainter(self)
+            wb = self._img_rect_to_widget(self._selected.bounds())
+            sp.setPen(QPen(QColor(0, 140, 255), 1, Qt.PenStyle.DashLine))
+            sp.setBrush(Qt.BrushStyle.NoBrush)
+            sp.drawRect(wb)
+            sp.setPen(QPen(QColor(0, 140, 255), 1))
+            sp.setBrush(QColor(255, 255, 255))
+            for hr in self._handle_rects(self._selected):
+                sp.drawRect(hr)
+            sp.end()
 
         # Status hint (e.g. "翻译中…") drawn in widget (unscaled) coords
         if self._status:
@@ -299,6 +325,30 @@ class PinnedViewer(QWidget):
         lp = pos - cr.topLeft()
         return QPoint(int(lp.x() * sx), int(lp.y() * sy))
 
+    def _img_to_widget(self, p: QPoint) -> QPoint:
+        cr = self._canvas_rect()
+        sx = cr.width()  / self._base.width()
+        sy = cr.height() / self._base.height()
+        return QPoint(int(cr.x() + p.x() * sx), int(cr.y() + p.y() * sy))
+
+    def _img_rect_to_widget(self, r: QRect) -> QRect:
+        return QRect(self._img_to_widget(r.topLeft()),
+                     self._img_to_widget(r.bottomRight()))
+
+    def _handle_rects(self, ann: Annotation) -> list[QRect]:
+        """4 corner handles (widget coords) for the selected annotation."""
+        wb = self._img_rect_to_widget(ann.bounds())
+        s = HANDLE_SIZE
+        corners = [wb.topLeft(), wb.topRight(), wb.bottomRight(), wb.bottomLeft()]
+        return [QRect(c.x() - s // 2, c.y() - s // 2, s, s) for c in corners]
+
+    def _hit_annotation(self, img_pos: QPoint) -> Annotation | None:
+        """Topmost annotation under the point (image coords), or None."""
+        for ann in reversed(self._annotations):
+            if ann.contains(img_pos):
+                return ann
+        return None
+
     def _in_canvas(self, pos: QPoint) -> bool:
         return pos.y() < self.height() - TOOLBAR_HEIGHT
 
@@ -308,21 +358,36 @@ class PinnedViewer(QWidget):
         pos = event.pos()
         if not self._in_canvas(pos):
             return
+        self._commit_editor()  # finish any in-progress text edit
 
         if self._tool == Tool.SELECT:
+            self._press_widget = pos
+            # 1) resize handle of the current selection?
+            if self._selected is not None:
+                for i, hr in enumerate(self._handle_rects(self._selected)):
+                    if hr.contains(pos):
+                        self._interaction = "resize"
+                        self._resize_idx = i
+                        self._orig_bounds = self._selected.bounds()
+                        return
+            # 2) hit an annotation → select & move it
+            hit = self._hit_annotation(self._to_image_coords(pos))
+            if hit is not None:
+                self._selected = hit
+                self._interaction = "move"
+                self.update()
+                return
+            # 3) empty area → deselect & drag the window
+            self._selected = None
+            self._interaction = "window"
             self._drag_offset = pos
+            self.update()
             return
 
         img_pos = self._to_image_coords(pos)
 
         if self._tool == Tool.TEXT:
-            text, ok = QInputDialog.getText(self, "文字标注", "输入文字:")
-            if ok and text:
-                self._annotations.append(
-                    Annotation(Tool.TEXT, QColor(self._color), self._pen_width,
-                               start=img_pos, text=text)
-                )
-                self.update()
+            self._open_text_editor(pos, img_pos)
             return
 
         ann = Annotation(self._tool, QColor(self._color), self._pen_width,
@@ -333,9 +398,23 @@ class PinnedViewer(QWidget):
 
     def mouseMoveEvent(self, event):
         pos = event.pos()
-        if self._tool == Tool.SELECT and self._drag_offset:
-            delta = pos - self._drag_offset
-            self.move(self.pos() + delta)
+
+        if self._tool == Tool.SELECT and self._interaction:
+            if self._interaction == "window" and self._drag_offset:
+                self.move(self.pos() + (pos - self._drag_offset))
+                self._drag_offset = pos
+                return
+            if self._selected is None or self._press_widget is None:
+                return
+            img_now = self._to_image_coords(pos)
+            img_press = self._to_image_coords(self._press_widget)
+            if self._interaction == "move":
+                self._selected.translate(img_now - img_press)
+                self._press_widget = pos
+            elif self._interaction == "resize" and self._orig_bounds:
+                self._selected.resize_to(
+                    self._resized_rect(self._orig_bounds, img_now))
+            self.update()
             return
 
         if self._drawing:
@@ -345,30 +424,144 @@ class PinnedViewer(QWidget):
                 self._drawing.points.append(img_pos)
             self.update()
 
+    def _resized_rect(self, old: QRect, img_now: QPoint) -> QRect:
+        """New bounds when dragging corner _resize_idx to img_now."""
+        l, t, r, b = old.left(), old.top(), old.right(), old.bottom()
+        if self._resize_idx == 0:      # top-left
+            l, t = img_now.x(), img_now.y()
+        elif self._resize_idx == 1:    # top-right
+            r, t = img_now.x(), img_now.y()
+        elif self._resize_idx == 2:    # bottom-right
+            r, b = img_now.x(), img_now.y()
+        elif self._resize_idx == 3:    # bottom-left
+            l, b = img_now.x(), img_now.y()
+        rect = QRect(QPoint(l, t), QPoint(r, b)).normalized()
+        if rect.width() < 6:
+            rect.setWidth(6)
+        if rect.height() < 6:
+            rect.setHeight(6)
+        return rect
+
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._drag_offset = None
+        self._interaction = None
+        self._resize_idx = -1
+        self._orig_bounds = None
         if self._drawing:
             self._annotations.append(self._drawing)
+            self._selected = self._drawing
             self._drawing = None
             self.update()
 
     def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            if self._in_canvas(event.pos()):
-                # Cancel any in-progress drawing stroke from the first click
-                self._drawing = None
-                self._drag_offset = None
-                self._copy_image()
-                self._on_close()
+        if event.button() == Qt.MouseButton.LeftButton and self._in_canvas(event.pos()):
+            img_pos = self._to_image_coords(event.pos())
+            hit = self._hit_annotation(img_pos)
+            if hit is not None and hit.tool == Tool.TEXT:
+                # Edit this text in place
+                self._edit_text_annotation(hit)
                 return
+            # Empty area → copy and close
+            self._drawing = None
+            self._interaction = None
+            self._copy_image()
+            self._on_close()
+            return
         if event.button() == Qt.MouseButton.RightButton:
             self._on_close()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            if self._editor is not None:
+                self._cancel_editor()
+                return
             self._on_close()
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self._selected is not None and self._editor is None:
+                if self._selected in self._annotations:
+                    self._annotations.remove(self._selected)
+                self._selected = None
+                self.update()
+
+    # ── Inline text editing ────────────────────────────────────────────────
+
+    def _open_text_editor(self, widget_pos: QPoint, img_pos: QPoint,
+                          existing: Annotation | None = None):
+        from PyQt6.QtWidgets import QLineEdit
+        cr = self._canvas_rect()
+        sx = cr.width() / self._base.width()   # image→widget scale
+
+        if existing is not None:
+            self._editing_ann = existing
+            img_pos = existing.start
+            widget_pos = self._img_to_widget(existing.start)
+            font_px_img = existing.font_size
+            text = existing.text
+            color = existing.color
+        else:
+            self._editing_ann = None
+            font_px_img = max(16, self._pen_width * 10)
+            text = ""
+            color = QColor(self._color)
+
+        self._editor_img_pos = img_pos
+        self._editor_font_img = font_px_img
+        self._editor_color = color
+
+        ed = QLineEdit(self)
+        ed.setText(text)
+        widget_font = max(10, int(font_px_img * sx))
+        ed.setStyleSheet(
+            f"QLineEdit {{ background: rgba(255,255,255,40); border: 1px dashed "
+            f"rgba(0,0,0,120); color: {color.name()}; "
+            f"font-family: 'Microsoft YaHei'; font-size: {widget_font}px; padding:0; }}"
+        )
+        ed.move(widget_pos)
+        ed.resize(max(120, int(len(text) * widget_font * 0.7) + 40), widget_font + 10)
+        ed.returnPressed.connect(self._commit_editor)
+        ed.show()
+        ed.setFocus()
+        self._editor = ed
+
+    def _edit_text_annotation(self, ann: Annotation):
+        # Temporarily remove from list while editing; recommit on finish.
+        if ann in self._annotations:
+            self._annotations.remove(ann)
+        self._selected = None
+        self.update()
+        self._open_text_editor(self._img_to_widget(ann.start), ann.start, existing=ann)
+
+    def _commit_editor(self):
+        if self._editor is None:
+            return
+        text = self._editor.text().strip()
+        ed = self._editor
+        self._editor = None
+        ed.deleteLater()
+        if text:
+            ann = Annotation(
+                Tool.TEXT, QColor(self._editor_color), self._pen_width,
+                start=self._editor_img_pos, text=text,
+                font_size=self._editor_font_img,
+            )
+            self._annotations.append(ann)
+            self._selected = ann
+        self._editing_ann = None
+        self.update()
+
+    def _cancel_editor(self):
+        if self._editor is None:
+            return
+        ed = self._editor
+        self._editor = None
+        ed.deleteLater()
+        # Restore the original annotation if we were editing one
+        if self._editing_ann is not None:
+            self._annotations.append(self._editing_ann)
+        self._editing_ann = None
+        self.update()
 
     def contextMenuEvent(self, event):
         self._on_close()
@@ -376,6 +569,7 @@ class PinnedViewer(QWidget):
     # ── Actions ───────────────────────────────────────────────────────────
 
     def _copy_image(self):
+        self._commit_editor()
         pixmap = self._render_flat()
         QApplication.clipboard().setPixmap(pixmap)
 

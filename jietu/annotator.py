@@ -1,9 +1,8 @@
-"""Annotation tools: rect, arrow, text, pen."""
+"""Annotation tools: rect, arrow, text, pen — movable & resizable objects."""
 from enum import Enum
 from dataclasses import dataclass, field
-from PyQt6.QtCore import QPoint, QRect, Qt
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QPolygonF
-from PyQt6.QtCore import QPointF
+from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt
+from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QFontMetrics, QPolygonF
 import math
 
 
@@ -23,7 +22,55 @@ class Annotation:
     start: QPoint = field(default_factory=QPoint)
     end: QPoint = field(default_factory=QPoint)
     text: str = ""
-    points: list = field(default_factory=list)  # for pen
+    points: list = field(default_factory=list)   # for pen
+    font_size: int = 28                          # for text (image px)
+
+    # ── Geometry ──────────────────────────────────────────────────────────
+
+    def bounds(self) -> QRect:
+        if self.tool == Tool.PEN and self.points:
+            xs = [p.x() for p in self.points]
+            ys = [p.y() for p in self.points]
+            return QRect(QPoint(min(xs), min(ys)),
+                         QPoint(max(xs), max(ys))).normalized()
+        if self.tool == Tool.TEXT:
+            font = QFont("Microsoft YaHei")
+            font.setPixelSize(max(8, self.font_size))
+            fm = QFontMetrics(font)
+            w = max(10, fm.horizontalAdvance(self.text or " "))
+            h = max(10, fm.height())
+            return QRect(self.start, QSize(w, h))
+        return QRect(self.start, self.end).normalized()
+
+    def translate(self, d: QPoint):
+        self.start = self.start + d
+        self.end = self.end + d
+        self.points = [p + d for p in self.points]
+
+    def resize_to(self, new: QRect):
+        """Reshape the annotation to fit a new bounding rect."""
+        old = self.bounds()
+        if old.width() <= 0 or old.height() <= 0:
+            return
+        if self.tool == Tool.TEXT:
+            self.start = new.topLeft()
+            self.font_size = max(8, new.height())
+            return
+        sx = new.width() / old.width()
+        sy = new.height() / old.height()
+
+        def mp(p: QPoint) -> QPoint:
+            return QPoint(
+                round(new.x() + (p.x() - old.x()) * sx),
+                round(new.y() + (p.y() - old.y()) * sy),
+            )
+
+        self.start = mp(self.start)
+        self.end = mp(self.end)
+        self.points = [mp(p) for p in self.points]
+
+    def contains(self, p: QPoint, margin: int = 4) -> bool:
+        return self.bounds().adjusted(-margin, -margin, margin, margin).contains(p)
 
 
 def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint):
@@ -61,9 +108,12 @@ def render_annotation(painter: QPainter, ann: Annotation):
         draw_arrow(painter, ann.start, ann.end)
 
     elif ann.tool == Tool.TEXT and ann.text:
-        font = QFont("Arial", max(12, ann.width * 4))
+        font = QFont("Microsoft YaHei")
+        font.setPixelSize(max(8, ann.font_size))
         painter.setFont(font)
-        painter.drawText(ann.start, ann.text)
+        fm = QFontMetrics(font)
+        # start is the top-left; draw baseline accordingly
+        painter.drawText(ann.start.x(), ann.start.y() + fm.ascent(), ann.text)
 
     elif ann.tool == Tool.PEN and len(ann.points) > 1:
         for i in range(len(ann.points) - 1):
