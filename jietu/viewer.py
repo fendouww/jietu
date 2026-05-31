@@ -38,6 +38,7 @@ class PinnedViewer(QWidget):
         self._pen_width = 2
         self._drawing: Annotation | None = None
         self._drag_offset: QPoint | None = None
+        self._win_drag_offset: QPoint | None = None
 
         # Selection / editing state
         self._selected: Annotation | None = None
@@ -377,10 +378,12 @@ class PinnedViewer(QWidget):
                 self._interaction = "move"
                 self.update()
                 return
-            # 3) empty area → deselect & drag the window
+            # 3) empty area → deselect & drag the window.
+            # Use GLOBAL coords: the window moves under the cursor, so widget-
+            # local coords would shift each event and lag behind the cursor.
             self._selected = None
             self._interaction = "window"
-            self._drag_offset = pos
+            self._win_drag_offset = event.globalPosition().toPoint() - self.pos()
             self.update()
             return
 
@@ -400,9 +403,8 @@ class PinnedViewer(QWidget):
         pos = event.pos()
 
         if self._tool == Tool.SELECT and self._interaction:
-            if self._interaction == "window" and self._drag_offset:
-                self.move(self.pos() + (pos - self._drag_offset))
-                self._drag_offset = pos
+            if self._interaction == "window" and self._win_drag_offset is not None:
+                self.move(event.globalPosition().toPoint() - self._win_drag_offset)
                 return
             if self._selected is None or self._press_widget is None:
                 return
@@ -446,6 +448,7 @@ class PinnedViewer(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._drag_offset = None
+        self._win_drag_offset = None
         self._interaction = None
         self._resize_idx = -1
         self._orig_bounds = None
