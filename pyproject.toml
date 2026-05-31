@@ -12,6 +12,7 @@ dependencies = [
     "PyQt6>=6.6",
     "mss>=9.0",
     "Pillow>=10.0",
+    "numpy>=1.21",
     "deep-translator>=1.11",
     "pynput>=1.7",
     # OCR backend is platform-specific:
