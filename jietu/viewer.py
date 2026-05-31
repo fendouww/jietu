@@ -127,12 +127,14 @@ class PinnedViewer(QWidget):
         act_color  = act("🎨", "颜色")
         act_trans  = act("译", "OCR翻译")
         act_copy   = act("⎘", "复制图片")
+        act_save   = act("💾", "保存为图片")
         act_close  = act("✕", "关闭")
 
         tb.addAction(self._act_pin)
         tb.addAction(act_color)
         tb.addAction(act_trans)
         tb.addAction(act_copy)
+        tb.addAction(act_save)
         tb.addAction(act_close)
 
         # Connections
@@ -145,6 +147,7 @@ class PinnedViewer(QWidget):
         act_color.triggered.connect(self._pick_color)
         act_trans.triggered.connect(self._start_translation)
         act_copy.triggered.connect(self._copy_image)
+        act_save.triggered.connect(self._save_image)
         act_close.triggered.connect(self._on_close)
 
         return tb
@@ -575,6 +578,25 @@ class PinnedViewer(QWidget):
         self._commit_editor()
         pixmap = self._render_flat()
         QApplication.clipboard().setPixmap(pixmap)
+
+    def _save_image(self):
+        self._commit_editor()
+        from PyQt6.QtWidgets import QFileDialog
+        from PyQt6.QtCore import QStandardPaths, QDateTime
+        pics = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.PicturesLocation) or ""
+        stamp = QDateTime.currentDateTime().toString("yyyyMMdd_HHmmss")
+        default = f"{pics}/jietu_{stamp}.png" if pics else f"jietu_{stamp}.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存为图片", default,
+            "PNG 图片 (*.png);;JPEG 图片 (*.jpg);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        pixmap = self._render_flat()
+        if not pixmap.save(path):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "保存失败", f"无法保存到：\n{path}")
 
     def _render_flat(self) -> QPixmap:
         """Render base + annotations at full physical resolution (DPR=1).
