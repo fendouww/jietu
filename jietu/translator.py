@@ -5,6 +5,27 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PIL import Image
 import numpy as np
 
+# ── Cached OCR reader (load the model ONCE, reuse for every translation) ──────
+_READER = None
+_READER_LOCK = threading.Lock()
+_LANGS = ["en", "ch_sim"]
+
+
+def get_reader():
+    """Return a shared easyocr.Reader, building it on first use (thread-safe)."""
+    global _READER
+    if _READER is None:
+        with _READER_LOCK:
+            if _READER is None:
+                import easyocr
+                _READER = easyocr.Reader(_LANGS, gpu=False, verbose=False)
+    return _READER
+
+
+def preload():
+    """Warm up the OCR model in the background so the first translation is fast."""
+    threading.Thread(target=get_reader, daemon=True).start()
+
 
 class TranslateWorker(QObject):
     """Run OCR + translation in a background thread."""
@@ -16,21 +37,17 @@ class TranslateWorker(QObject):
         super().__init__()
         self._image = image
         self._target = target_lang
-        self._reader = None
 
     def run(self):
         threading.Thread(target=self._work, daemon=True).start()
 
     def _work(self):
         try:
-            import easyocr
             from deep_translator import GoogleTranslator
 
-            if self._reader is None:
-                self._reader = easyocr.Reader(["en", "ch_sim"], gpu=False, verbose=False)
-
+            reader = get_reader()   # cached — no per-call model reload
             img_np = np.array(self._image)
-            results = self._reader.readtext(img_np)
+            results = reader.readtext(img_np)
 
             translator = GoogleTranslator(source="auto", target=self._target)
             output = []

@@ -8,6 +8,7 @@ from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
 from jietu.hotkey import GlobalHotkey
+from jietu import translator
 import jietu.startup as startup
 
 
@@ -54,6 +55,10 @@ class App(QWidget):
             )
 
         self._updater.check_async()
+
+        # Warm up the OCR model in the background so the first translation
+        # doesn't pay the one-time model-load cost.
+        translator.preload()
 
         self.hide()
 
