@@ -41,7 +41,7 @@ class PinnedViewer(QWidget):
 
         self._tool = Tool.SELECT
         self._color = QColor(255, 50, 50)
-        self._pen_width = 2
+        self._pen_width = 4   # default line thickness (2x)
         self._drawing: Annotation | None = None
         self._drag_offset: QPoint | None = None
         self._win_drag_offset: QPoint | None = None
@@ -599,7 +599,7 @@ class PinnedViewer(QWidget):
             color = existing.color
         else:
             self._editing_ann = None
-            font_px_img = max(16, self._pen_width * 10)
+            font_px_img = max(40, self._pen_width * 10)   # default font size (2x of old)
             text = ""
             color = QColor(self._color)
 
