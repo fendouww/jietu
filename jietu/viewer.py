@@ -1,5 +1,6 @@
 """Floating pinned screenshot viewer with annotation and translation support."""
 from __future__ import annotations
+import sys
 from PyQt6.QtWidgets import (
     QWidget, QToolBar, QVBoxLayout, QInputDialog,
     QColorDialog, QLabel, QSizeGrip, QApplication
@@ -31,6 +32,7 @@ class PinnedViewer(QWidget):
         self._annotations: list[Annotation] = []
         self._translations: list[tuple] = []  # (bbox, text, translated)
         self._show_translation = False
+        self._macos_topmost_applied = False
 
         self._tool = Tool.SELECT
         self._color = QColor(255, 50, 50)
@@ -56,6 +58,28 @@ class PinnedViewer(QWidget):
         self._setup_ui()
 
     # ── Window setup ────────────────────────────────────────────────────────
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if sys.platform == "darwin" and not self._macos_topmost_applied:
+            self._macos_topmost_applied = True
+            self._apply_macos_topmost()
+
+    def _apply_macos_topmost(self):
+        """Force the native NSWindow to float above all apps and not hide when
+        jietu loses focus (Qt.Tool windows hide on deactivate by default)."""
+        try:
+            import objc
+            view = objc.objc_object(c_void_p=int(self.winId()))
+            win = view.window()
+            if win is None:
+                return
+            win.setLevel_(25)             # NSStatusWindowLevel — above normal apps
+            win.setHidesOnDeactivate_(False)
+            # CanJoinAllSpaces(1<<0) | FullScreenAuxiliary(1<<8)
+            win.setCollectionBehavior_((1 << 0) | (1 << 8))
+        except Exception:
+            pass
 
     def _setup_ui(self):
         self.setWindowFlags(
