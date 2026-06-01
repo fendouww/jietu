@@ -29,6 +29,11 @@ class PinnedViewer(QWidget):
     def __init__(self, pixmap: QPixmap):
         super().__init__()
         self._base = pixmap.copy()
+        # Work in PURE physical pixels internally: remember the scale (for window
+        # sizing) and reset DPR to 1 so painting has no high-DPI source-rect
+        # ambiguity (that ambiguity was making Retina captures look blurry).
+        self._dpr = self._base.devicePixelRatio() or 1.0
+        self._base.setDevicePixelRatio(1.0)
         self._annotations: list[Annotation] = []
         self._translations: list[tuple] = []  # (bbox, text, translated)
         self._show_translation = False
@@ -90,11 +95,10 @@ class PinnedViewer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
-        # _base holds FULL physical-resolution pixels with DPR set.
+        # _base holds FULL physical-resolution pixels (DPR reset to 1).
         # Window must be sized in LOGICAL pixels = physical / dpr.
-        dpr = self._base.devicePixelRatio() or 1.0
-        lw = round(self._base.width() / dpr)
-        lh = round(self._base.height() / dpr)
+        lw = round(self._base.width() / self._dpr)
+        lh = round(self._base.height() / self._dpr)
         self.resize(lw, lh + TOOLBAR_HEIGHT)
 
         # Toolbar sits at the BOTTOM, below the screenshot canvas.
