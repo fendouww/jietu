@@ -17,8 +17,8 @@ from jietu.annotator import Annotation, Tool, render_annotation
 from jietu.translator import TranslateWorker
 
 
-TOOLBAR_HEIGHT = 54   # 1.5x
-HANDLE_SIZE = 10
+TOOLBAR_HEIGHT = 27   # half of the previous 54
+HANDLE_SIZE = 9
 
 
 class PinnedViewer(QWidget):
@@ -126,12 +126,12 @@ class PinnedViewer(QWidget):
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar()
         tb.setFixedHeight(TOOLBAR_HEIGHT)
-        tb.setIconSize(QSize(27, 27))   # 1.5x
+        tb.setIconSize(QSize(14, 14))
         tb.setStyleSheet(
-            "QToolBar { background:#222; border:none; spacing:3px; }"
-            "QToolButton { color:white; font-size:21px; padding:3px 9px; border:none; }"
-            "QToolButton:checked { background:#555; border-radius:4px; }"
-            "QToolButton:hover { background:#444; border-radius:4px; }"
+            "QToolBar { background:#222; border:none; spacing:2px; }"
+            "QToolButton { color:white; font-size:11px; padding:1px 5px; border:none; }"
+            "QToolButton:checked { background:#555; border-radius:3px; }"
+            "QToolButton:hover { background:#444; border-radius:3px; }"
         )
 
         def act(label: str, tip: str, checkable=False):
