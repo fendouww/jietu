@@ -60,6 +60,14 @@ class PinnedViewer(QWidget):
         self._has_translated = False
         self._status = ""
 
+        # High-quality (Lanczos) upscale cache for zoomed display
+        self._hq_pix: QPixmap | None = None
+        self._hq_key = None
+        self._hq_pending = None
+        self._hq_timer = QTimer(self)
+        self._hq_timer.setSingleShot(True)
+        self._hq_timer.timeout.connect(self._render_hq)
+
         self._setup_ui()
 
     # ── Window setup ────────────────────────────────────────────────────────
@@ -205,25 +213,37 @@ class PinnedViewer(QWidget):
         painter = QPainter(self)
         cr = self._canvas_rect()
 
-        # Pixel-perfect when the canvas maps 1:1 to the source pixels (the
-        # default pinned size on a HiDPI backing store); only smooth when the
-        # window is actually scaled (resized / zoomed) to avoid aliasing.
-        device_w = cr.width() * self.devicePixelRatioF()
-        native = abs(device_w - self._base.width()) < 1.5
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, not native)
         try:
             painter.setRenderHint(QPainter.RenderHint.LosslessImageRendering, True)
         except Exception:
             pass
 
-        # Map the full-res physical source rect into the logical canvas rect.
-        # On a HiDPI backing store Qt renders at full device resolution → crisp.
-        painter.drawPixmap(QRectF(cr), self._base, QRectF(self._base.rect()))
+        dpr = self.devicePixelRatioF()
+        device_w = cr.width() * dpr
+        native = abs(device_w - self._base.width()) < 1.5
+
+        if native:
+            # 1:1 with the source on the HiDPI backing store → pixel-perfect.
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+            painter.drawPixmap(QRectF(cr), self._base, QRectF(self._base.rect()))
+        else:
+            key = (max(1, round(cr.width() * dpr)), max(1, round(cr.height() * dpr)))
+            if self._hq_key == key and self._hq_pix is not None:
+                # High-quality Lanczos-resampled image for this zoom level.
+                painter.drawPixmap(cr.topLeft(), self._hq_pix)
+            else:
+                # Fast smooth preview now; schedule the HQ render when settled.
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                painter.drawPixmap(QRectF(cr), self._base, QRectF(self._base.rect()))
+                self._hq_pending = key
+                self._hq_timer.start(120)
 
         # Annotations are stored in physical-pixel image coords.
         sx = cr.width()  / self._base.width()
         sy = cr.height() / self._base.height()
 
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.translate(cr.topLeft())
         painter.scale(sx, sy)
 
@@ -263,6 +283,35 @@ class PinnedViewer(QWidget):
             sp.drawText(QRect(0, 0, self.width(), 26),
                         Qt.AlignmentFlag.AlignCenter, self._status)
             sp.end()
+
+    # ── High-quality (Lanczos) upscale for zoomed display ────────────────────
+
+    @staticmethod
+    def _pil_to_qpixmap(pil: Image.Image) -> QPixmap:
+        rgba = pil.convert("RGBA")
+        data = rgba.tobytes("raw", "RGBA")
+        qimg = QImage(data, rgba.width, rgba.height,
+                      QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(qimg.copy())
+
+    def _render_hq(self):
+        key = self._hq_pending
+        if key is None:
+            return
+        dw, dh = key
+        if dw < 1 or dh < 1 or dw * dh > 40_000_000:   # cap ~40 MP for safety
+            return
+        try:
+            pil = self._pixmap_to_pil(self._base)
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            scaled = pil.resize((dw, dh), resample)
+            pix = self._pil_to_qpixmap(scaled)
+            pix.setDevicePixelRatio(self.devicePixelRatioF())
+            self._hq_pix = pix
+            self._hq_key = key
+            self.update()
+        except Exception:
+            pass
 
     def _paint_translations(self, painter: QPainter):
         base_img = self._base.toImage()
@@ -636,7 +685,9 @@ class PinnedViewer(QWidget):
         if not path:
             return
         pixmap = self._render_flat()
-        if not pixmap.save(path):
+        # PNG is lossless; for JPEG use high quality (95) to avoid artifacts.
+        quality = 95 if path.lower().endswith((".jpg", ".jpeg")) else -1
+        if not pixmap.save(path, None, quality):
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "保存失败", f"无法保存到：\n{path}")
 
@@ -650,8 +701,13 @@ class PinnedViewer(QWidget):
         result = self._base.copy()
         result.setDevicePixelRatio(1.0)
         painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         for ann in self._annotations:
             render_annotation(painter, ann)
+        if self._show_translation and self._translations:
+            self._paint_translations(painter)
         painter.end()
         return result
 
