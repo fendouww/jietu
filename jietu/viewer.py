@@ -203,8 +203,18 @@ class PinnedViewer(QWidget):
 
     def paintEvent(self, _event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         cr = self._canvas_rect()
+
+        # Pixel-perfect when the canvas maps 1:1 to the source pixels (the
+        # default pinned size on a HiDPI backing store); only smooth when the
+        # window is actually scaled (resized / zoomed) to avoid aliasing.
+        device_w = cr.width() * self.devicePixelRatioF()
+        native = abs(device_w - self._base.width()) < 1.5
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, not native)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.LosslessImageRendering, True)
+        except Exception:
+            pass
 
         # Map the full-res physical source rect into the logical canvas rect.
         # On a HiDPI backing store Qt renders at full device resolution → crisp.
