@@ -586,7 +586,7 @@ class PinnedViewer(QWidget):
 
     def _open_text_editor(self, widget_pos: QPoint, img_pos: QPoint,
                           existing: Annotation | None = None):
-        from PyQt6.QtWidgets import QLineEdit
+        from PyQt6.QtWidgets import QPlainTextEdit
         cr = self._canvas_rect()
         sx = cr.width() / self._base.width()   # image→widget scale
 
@@ -607,30 +607,36 @@ class PinnedViewer(QWidget):
         self._editor_font_img = font_px_img
         self._editor_color = color
 
-        ed = QLineEdit(self)
+        # Multi-line editor: Enter inserts a newline; click elsewhere / switch
+        # tool / Esc finishes editing.
+        ed = QPlainTextEdit(self)
         widget_font = max(10, int(font_px_img * sx))
         f = QFont("Microsoft YaHei")
         f.setPixelSize(widget_font)
         ed.setFont(f)
+        ed.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        ed.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        ed.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         ed.setStyleSheet(
-            f"QLineEdit {{ background: rgba(255,255,255,40); border: 1px dashed "
-            f"rgba(0,0,0,120); color: {color.name()}; padding: 0 2px; }}"
+            f"QPlainTextEdit {{ background: rgba(255,255,255,40); border: 1px "
+            f"dashed rgba(0,0,0,120); color: {color.name()}; padding: 0 2px; }}"
         )
-        ed.setText(text)
+        ed.setPlainText(text)
         ed.move(widget_pos)
-        ed.returnPressed.connect(self._commit_editor)
-        # Auto-grow the box to fit every character as you type.
-        ed.textChanged.connect(lambda: self._grow_editor(ed, widget_font))
+        ed.textChanged.connect(lambda: self._grow_editor(ed))
         self._editor = ed
-        self._grow_editor(ed, widget_font)
+        self._grow_editor(ed)
         ed.show()
         ed.setFocus()
 
-    def _grow_editor(self, ed, widget_font: int):
+    def _grow_editor(self, ed):
         fm = ed.fontMetrics()
-        w = fm.horizontalAdvance(ed.text() or " ") + 18
+        lines = (ed.toPlainText() or " ").split("\n")
+        w = max(fm.horizontalAdvance(ln or " ") for ln in lines) + 22
         w = max(60, min(w, self.width() - ed.x() - 6))
-        ed.resize(w, fm.height() + 8)
+        h = fm.lineSpacing() * len(lines) + 14
+        h = max(fm.height() + 14, min(h, self.height() - ed.y() - 6))
+        ed.resize(w, h)
 
     def _edit_text_annotation(self, ann: Annotation):
         # Temporarily remove from list while editing; recommit on finish.
@@ -643,7 +649,7 @@ class PinnedViewer(QWidget):
     def _commit_editor(self):
         if self._editor is None:
             return
-        text = self._editor.text().strip()
+        text = self._editor.toPlainText().strip()
         ed = self._editor
         self._editor = None
         ed.deleteLater()

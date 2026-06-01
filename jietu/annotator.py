@@ -39,8 +39,9 @@ class Annotation:
             font = QFont("Microsoft YaHei")
             font.setPixelSize(max(8, self.font_size))
             fm = QFontMetrics(font)
-            w = max(10, fm.horizontalAdvance(self.text or " "))
-            h = max(10, fm.height())
+            lines = (self.text or " ").split("\n")
+            w = max(10, max(fm.horizontalAdvance(ln or " ") for ln in lines))
+            h = max(10, fm.lineSpacing() * len(lines))
             return QRect(self.start, QSize(w, h))
         return QRect(self.start, self.end).normalized()
 
@@ -86,9 +87,9 @@ def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint, width: int, color: QCo
     nx, ny = -uy, ux                  # perpendicular
 
     base = max(2.0, float(width))
-    head_half = min(max(base * 3.5, L * 0.14), L * 0.5)   # arrowhead half-width
-    head_len = min(head_half * 1.7, L * 0.6)               # arrowhead length
-    shaft_half = head_half * 0.32                          # shaft half-width at neck
+    head_half = min(max(base * 2.4, L * 0.085), L * 0.32)  # arrowhead half-width
+    head_len = min(head_half * 2.4, L * 0.55)              # arrowhead length (long)
+    shaft_half = head_half * 0.20                          # shaft half-width (slim)
 
     # Neck = where the shaft meets the arrowhead
     cx, cy = p2.x() - ux * head_len, p2.y() - uy * head_len
@@ -141,8 +142,11 @@ def render_annotation(painter: QPainter, ann: Annotation):
         font.setPixelSize(max(8, ann.font_size))
         painter.setFont(font)
         fm = QFontMetrics(font)
-        # start is the top-left; draw baseline accordingly
-        painter.drawText(ann.start.x(), ann.start.y() + fm.ascent(), ann.text)
+        # start is the top-left; draw each line (multi-line support)
+        ls = fm.lineSpacing()
+        for i, line in enumerate(ann.text.split("\n")):
+            painter.drawText(ann.start.x(),
+                             ann.start.y() + fm.ascent() + i * ls, line)
 
     elif ann.tool == Tool.PEN and len(ann.points) > 1:
         for i in range(len(ann.points) - 1):
