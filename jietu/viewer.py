@@ -31,7 +31,6 @@ class PinnedViewer(QWidget):
         self._annotations: list[Annotation] = []
         self._translations: list[tuple] = []  # (bbox, text, translated)
         self._show_translation = False
-        self._pinned = True
 
         self._tool = Tool.SELECT
         self._color = QColor(255, 50, 50)
@@ -122,18 +121,13 @@ class PinnedViewer(QWidget):
 
         tb.addSeparator()
 
-        self._act_pin = act("📌", "钉住桌面（置顶）", True)
-        self._act_pin.setChecked(True)
         act_color  = act("🎨", "颜色")
         act_trans  = act("译", "OCR翻译")
-        act_copy   = act("⎘", "复制图片")
         act_save   = act("💾", "保存为图片")
         act_close  = act("✕", "关闭")
 
-        tb.addAction(self._act_pin)
         tb.addAction(act_color)
         tb.addAction(act_trans)
-        tb.addAction(act_copy)
         tb.addAction(act_save)
         tb.addAction(act_close)
 
@@ -143,10 +137,8 @@ class PinnedViewer(QWidget):
         self._act_arrow.triggered.connect(lambda:  self._set_tool(Tool.ARROW))
         self._act_pen.triggered.connect(lambda:    self._set_tool(Tool.PEN))
         self._act_text.triggered.connect(lambda:   self._set_tool(Tool.TEXT))
-        self._act_pin.triggered.connect(self._toggle_pin)
         act_color.triggered.connect(self._pick_color)
         act_trans.triggered.connect(self._start_translation)
-        act_copy.triggered.connect(self._copy_image)
         act_save.triggered.connect(self._save_image)
         act_close.triggered.connect(self._on_close)
 
@@ -169,19 +161,6 @@ class PinnedViewer(QWidget):
             else Qt.CursorShape.CrossCursor
         )
         self.update()
-
-    def _toggle_pin(self):
-        self._pinned = self._act_pin.isChecked()
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-        )
-        if self._pinned:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        pos = self.pos()
-        self.setWindowFlags(flags)
-        self.move(pos)
-        self.show()
 
     def _pick_color(self):
         c = QColorDialog.getColor(self._color, self)
