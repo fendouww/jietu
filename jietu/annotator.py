@@ -86,12 +86,12 @@ def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint, width: int, color: QCo
     ux, uy = dx / L, dy / L           # along the arrow
     nx, ny = -uy, ux                  # perpendicular
 
-    base = max(2.0, float(width))
+    base = max(2.0, float(width)) * 2.0      # whole arrow drawn at 2x
     # Head size is capped by the pen width (absolute upper limit) so it never
     # grows huge on long arrows; length only limits it for very short arrows.
-    head_half = min(base * 3.0, L * 0.28)    # arrowhead half-width (small, capped)
-    head_len = min(base * 8.0, L * 0.5)      # arrowhead length (capped)
-    shaft_half = min(max(1.0, base * 0.7), head_half * 0.6)  # < head, tied to pen
+    head_half = min(base * 3.0, L * 0.30)    # arrowhead half-width (capped)
+    head_len = min(base * 8.0, L * 0.55)     # arrowhead length (capped)
+    shaft_half = min(max(2.0, base * 0.7), head_half * 0.6)  # < head, tied to pen
 
     # Neck = where the shaft meets the arrowhead
     cx, cy = p2.x() - ux * head_len, p2.y() - uy * head_len

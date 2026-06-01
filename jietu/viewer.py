@@ -17,8 +17,8 @@ from jietu.annotator import Annotation, Tool, render_annotation
 from jietu.translator import TranslateWorker
 
 
-TOOLBAR_HEIGHT = 36
-HANDLE_SIZE = 8
+TOOLBAR_HEIGHT = 54   # 1.5x
+HANDLE_SIZE = 10
 
 
 class PinnedViewer(QWidget):
@@ -126,12 +126,12 @@ class PinnedViewer(QWidget):
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar()
         tb.setFixedHeight(TOOLBAR_HEIGHT)
-        tb.setIconSize(QSize(18, 18))
+        tb.setIconSize(QSize(27, 27))   # 1.5x
         tb.setStyleSheet(
-            "QToolBar { background:#222; border:none; spacing:2px; }"
-            "QToolButton { color:white; font-size:14px; padding:2px 6px; border:none; }"
-            "QToolButton:checked { background:#555; border-radius:3px; }"
-            "QToolButton:hover { background:#444; border-radius:3px; }"
+            "QToolBar { background:#222; border:none; spacing:3px; }"
+            "QToolButton { color:white; font-size:21px; padding:3px 9px; border:none; }"
+            "QToolButton:checked { background:#555; border-radius:4px; }"
+            "QToolButton:hover { background:#444; border-radius:4px; }"
         )
 
         def act(label: str, tip: str, checkable=False):
@@ -177,6 +177,11 @@ class PinnedViewer(QWidget):
         act_trans.triggered.connect(self._start_translation)
         act_save.triggered.connect(self._save_image)
         act_close.triggered.connect(self._on_close)
+
+        # Make the select button twice as wide (primary tool, easy to hit).
+        sel_btn = tb.widgetForAction(self._act_select)
+        if sel_btn is not None:
+            sel_btn.setMinimumWidth(TOOLBAR_HEIGHT * 2)
 
         return tb
 
@@ -423,6 +428,16 @@ class PinnedViewer(QWidget):
         return pos.y() < self.height() - TOOLBAR_HEIGHT
 
     def mousePressEvent(self, event):
+        # Right-click = switch to the Select tool and pick the annotation
+        # under the cursor (no context menu, no window close).
+        if event.button() == Qt.MouseButton.RightButton:
+            self._commit_editor()
+            self._set_tool(Tool.SELECT)
+            if self._in_canvas(event.pos()):
+                self._selected = self._hit_annotation(
+                    self._to_image_coords(event.pos()))
+            self.update()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
         pos = event.pos()
@@ -566,8 +581,6 @@ class PinnedViewer(QWidget):
             self._copy_image()
             self._on_close()
             return
-        if event.button() == Qt.MouseButton.RightButton:
-            self._on_close()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
@@ -677,7 +690,8 @@ class PinnedViewer(QWidget):
         self.update()
 
     def contextMenuEvent(self, event):
-        self._on_close()
+        # Right-click is handled as "select" in mousePressEvent; suppress menu.
+        event.accept()
 
     # ── Actions ───────────────────────────────────────────────────────────
 
