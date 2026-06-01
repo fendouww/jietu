@@ -461,6 +461,31 @@ class PinnedViewer(QWidget):
             self._drawing = None
             self.update()
 
+    def wheelEvent(self, event):
+        """Scroll over the image zooms the screenshot, anchored at the cursor."""
+        p = event.position().toPoint()
+        if not self._in_canvas(p) or self._editor is not None:
+            return
+        cr = self._canvas_rect()
+        if cr.width() <= 0 or cr.height() <= 0:
+            return
+
+        factor = 1.1 if event.angleDelta().y() > 0 else 1 / 1.1
+        # Fraction of the image under the cursor (kept fixed across the zoom).
+        fx = max(0.0, min(1.0, p.x() / cr.width()))
+        fy = max(0.0, min(1.0, p.y() / cr.height()))
+        g = event.globalPosition().toPoint()
+
+        aspect = self._base.height() / self._base.width()
+        new_w = int(cr.width() * factor)
+        new_w = max(60, min(new_w, self._base.width() * 4))
+        new_h = max(40, int(new_w * aspect))
+
+        self.resize(new_w, new_h + TOOLBAR_HEIGHT)
+        # Move so the same image point stays under the cursor.
+        self.move(int(g.x() - fx * new_w), int(g.y() - fy * new_h))
+        self.update()
+
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self._in_canvas(event.pos()):
             img_pos = self._to_image_coords(event.pos())
