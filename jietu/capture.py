@@ -5,6 +5,7 @@ on macOS ("Displays have separate Spaces"), and per-screen overlays also handle
 mixed-DPI setups correctly (each screen uses its own grab and scale).
 """
 from __future__ import annotations
+import sys
 import mss
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtCore import Qt, QRect, QRectF, QPoint, QObject, pyqtSignal
@@ -105,14 +106,64 @@ class CaptureOverlay(QObject):
         self._build()
 
     def _build(self):
-        screens = sorted(QGuiApplication.screens(),
-                         key=lambda s: (s.geometry().x(), s.geometry().y()))
-        grabs = self._grab_per_screen(len(screens))
-        for screen, pix in zip(screens, grabs):
+        # macOS: native Quartz grab guarantees full Retina resolution (mss can
+        # return 1x on Retina → blurry). Other platforms: mss per-monitor.
+        pairs = None
+        if sys.platform == "darwin":
+            pairs = self._grab_mac_quartz()
+        if not pairs:
+            screens = sorted(QGuiApplication.screens(),
+                             key=lambda s: (s.geometry().x(), s.geometry().y()))
+            grabs = self._grab_per_screen(len(screens))
+            pairs = list(zip(screens, grabs))
+        for screen, pix in pairs:
             ov = _ScreenOverlay(screen, pix)
             ov.selected.connect(self._on_selected)
             ov.cancelled.connect(self._on_cancelled)
             self._overlays.append(ov)
+
+    def _grab_mac_quartz(self):
+        """Per-display capture via Quartz CGDisplayCreateImage (full Retina)."""
+        try:
+            import Quartz
+        except Exception:
+            return None
+        try:
+            err, ids, _ = Quartz.CGGetActiveDisplayList(16, None, None)
+            if err or not ids:
+                return None
+        except Exception:
+            return None
+
+        screens = QGuiApplication.screens()
+        pairs = []
+        for did in ids:
+            img = Quartz.CGDisplayCreateImage(did)
+            if img is None:
+                continue
+            w = Quartz.CGImageGetWidth(img)
+            h = Quartz.CGImageGetHeight(img)
+            bpr = Quartz.CGImageGetBytesPerRow(img)
+            provider = Quartz.CGImageGetDataProvider(img)
+            data = Quartz.CGDataProviderCopyData(provider)
+            qimg = QImage(bytes(data), w, h, bpr,
+                          QImage.Format.Format_ARGB32).copy()
+            pix = QPixmap.fromImage(qimg)
+            b = Quartz.CGDisplayBounds(did)
+            screen = self._match_screen(screens, int(b.origin.x), int(b.origin.y))
+            if screen is not None:
+                pairs.append((screen, pix))
+        return pairs or None
+
+    @staticmethod
+    def _match_screen(screens, x: int, y: int):
+        best, best_d = None, None
+        for s in screens:
+            g = s.geometry()
+            d = abs(g.x() - x) + abs(g.y() - y)
+            if best_d is None or d < best_d:
+                best, best_d = s, d
+        return best
 
     def _grab_per_screen(self, n: int) -> list[QPixmap]:
         """Grab each physical monitor; pair to screens by sorted position."""
