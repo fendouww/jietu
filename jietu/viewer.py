@@ -608,19 +608,29 @@ class PinnedViewer(QWidget):
         self._editor_color = color
 
         ed = QLineEdit(self)
-        ed.setText(text)
         widget_font = max(10, int(font_px_img * sx))
+        f = QFont("Microsoft YaHei")
+        f.setPixelSize(widget_font)
+        ed.setFont(f)
         ed.setStyleSheet(
             f"QLineEdit {{ background: rgba(255,255,255,40); border: 1px dashed "
-            f"rgba(0,0,0,120); color: {color.name()}; "
-            f"font-family: 'Microsoft YaHei'; font-size: {widget_font}px; padding:0; }}"
+            f"rgba(0,0,0,120); color: {color.name()}; padding: 0 2px; }}"
         )
+        ed.setText(text)
         ed.move(widget_pos)
-        ed.resize(max(120, int(len(text) * widget_font * 0.7) + 40), widget_font + 10)
         ed.returnPressed.connect(self._commit_editor)
+        # Auto-grow the box to fit every character as you type.
+        ed.textChanged.connect(lambda: self._grow_editor(ed, widget_font))
+        self._editor = ed
+        self._grow_editor(ed, widget_font)
         ed.show()
         ed.setFocus()
-        self._editor = ed
+
+    def _grow_editor(self, ed, widget_font: int):
+        fm = ed.fontMetrics()
+        w = fm.horizontalAdvance(ed.text() or " ") + 18
+        w = max(60, min(w, self.width() - ed.x() - 6))
+        ed.resize(w, fm.height() + 8)
 
     def _edit_text_annotation(self, ann: Annotation):
         # Temporarily remove from list while editing; recommit on finish.

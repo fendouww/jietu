@@ -2,7 +2,9 @@
 from enum import Enum
 from dataclasses import dataclass, field
 from PyQt6.QtCore import QPoint, QPointF, QRect, QSize, Qt
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QFontMetrics, QPolygonF
+from PyQt6.QtGui import (
+    QPainter, QPen, QColor, QFont, QFontMetrics, QPolygonF, QPainterPath,
+)
 import math
 
 
@@ -73,26 +75,54 @@ class Annotation:
         return self.bounds().adjusted(-margin, -margin, margin, margin).contains(p)
 
 
-def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint):
-    """Draw a line with an arrowhead at p2."""
-    painter.drawLine(p1, p2)
+def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint, width: int, color: QColor):
+    """Filled teardrop arrow: thin at the tail (p1), thick head at p2."""
     dx = p2.x() - p1.x()
     dy = p2.y() - p1.y()
-    length = math.hypot(dx, dy)
-    if length < 1:
+    L = math.hypot(dx, dy)
+    if L < 1:
         return
-    ux, uy = dx / length, dy / length
-    size = 14
-    ax = p2.x() - ux * size + uy * size * 0.4
-    ay = p2.y() - uy * size - ux * size * 0.4
-    bx = p2.x() - ux * size - uy * size * 0.4
-    by = p2.y() - uy * size + ux * size * 0.4
-    poly = QPolygonF([
-        QPointF(p2.x(), p2.y()),
-        QPointF(ax, ay),
-        QPointF(bx, by),
-    ])
-    painter.drawPolygon(poly)
+    ux, uy = dx / L, dy / L           # along the arrow
+    nx, ny = -uy, ux                  # perpendicular
+
+    base = max(2.0, float(width))
+    head_half = min(max(base * 3.5, L * 0.14), L * 0.5)   # arrowhead half-width
+    head_len = min(head_half * 1.7, L * 0.6)               # arrowhead length
+    shaft_half = head_half * 0.32                          # shaft half-width at neck
+
+    # Neck = where the shaft meets the arrowhead
+    cx, cy = p2.x() - ux * head_len, p2.y() - uy * head_len
+
+    def P(x, y):
+        return QPointF(x, y)
+
+    tail = P(p1.x(), p1.y())
+    neck_l = P(cx + nx * shaft_half, cy + ny * shaft_half)
+    neck_r = P(cx - nx * shaft_half, cy - ny * shaft_half)
+    wing_l = P(cx + nx * head_half, cy + ny * head_half)
+    wing_r = P(cx - nx * head_half, cy - ny * head_half)
+    tip = P(p2.x(), p2.y())
+
+    # Gentle convex bulge along the shaft → water-drop silhouette
+    mx, my = (p1.x() + cx) / 2, (p1.y() + cy) / 2
+    ctrl_l = P(mx + nx * shaft_half * 0.9, my + ny * shaft_half * 0.9)
+    ctrl_r = P(mx - nx * shaft_half * 0.9, my - ny * shaft_half * 0.9)
+
+    path = QPainterPath()
+    path.moveTo(tail)
+    path.quadTo(ctrl_l, neck_l)
+    path.lineTo(wing_l)
+    path.lineTo(tip)
+    path.lineTo(wing_r)
+    path.lineTo(neck_r)
+    path.quadTo(ctrl_r, tail)
+    path.closeSubpath()
+
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawPath(path)
+    painter.restore()
 
 
 def render_annotation(painter: QPainter, ann: Annotation):
@@ -104,8 +134,7 @@ def render_annotation(painter: QPainter, ann: Annotation):
         painter.drawRect(QRect(ann.start, ann.end).normalized())
 
     elif ann.tool == Tool.ARROW:
-        painter.setBrush(ann.color)
-        draw_arrow(painter, ann.start, ann.end)
+        draw_arrow(painter, ann.start, ann.end, ann.width, ann.color)
 
     elif ann.tool == Tool.TEXT and ann.text:
         font = QFont("Microsoft YaHei")
