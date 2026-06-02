@@ -38,6 +38,7 @@ class PinnedViewer(QWidget):
         self._annotations: list[Annotation] = []
         self._translations: list[tuple] = []  # (bbox, text, translated)
         self._show_translation = False
+        self._pinned = False
         self._macos_topmost_applied = False
 
         self._tool = Tool.SELECT
@@ -79,13 +80,12 @@ class PinnedViewer(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if sys.platform == "darwin" and not self._macos_topmost_applied:
-            self._macos_topmost_applied = True
-            self._apply_macos_topmost()
 
     def _apply_macos_topmost(self):
         """Force the native NSWindow to float above all apps and not hide when
         jietu loses focus (Qt.Tool windows hide on deactivate by default)."""
+        if self._macos_topmost_applied:
+            return
         try:
             import objc
             view = objc.objc_object(c_void_p=int(self.winId()))
@@ -96,15 +96,27 @@ class PinnedViewer(QWidget):
             win.setHidesOnDeactivate_(False)
             # CanJoinAllSpaces(1<<0) | FullScreenAuxiliary(1<<8)
             win.setCollectionBehavior_((1 << 0) | (1 << 8))
+            self._macos_topmost_applied = True
         except Exception:
             pass
 
+    def _clear_macos_topmost(self):
+        """Revert to a normal floating window when unpinned."""
+        try:
+            import objc
+            view = objc.objc_object(c_void_p=int(self.winId()))
+            win = view.window()
+            if win is None:
+                return
+            win.setLevel_(0)
+            win.setHidesOnDeactivate_(True)
+            win.setCollectionBehavior_(0)
+        except Exception:
+            pass
+        self._macos_topmost_applied = False
+
     def _setup_ui(self):
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
+        self._apply_window_flags()
         # Translucent so the SHADOW_MARGIN around the content can show a soft
         # drop shadow that separates the screenshot from the background.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -168,11 +180,15 @@ class PinnedViewer(QWidget):
 
         act_color  = act("🎨", "颜色")
         act_trans  = act("译", "OCR翻译")
+        self._act_pin = act("📌", "钉住桌面（始终置顶）", checkable=True)
+        act_copy   = act("⎘", "复制到剪贴板")
         act_save   = act("💾", "保存为图片")
         act_close  = act("✕", "关闭")
 
         tb.addAction(act_color)
         tb.addAction(act_trans)
+        tb.addAction(self._act_pin)
+        tb.addAction(act_copy)
         tb.addAction(act_save)
         tb.addAction(act_close)
 
@@ -184,6 +200,8 @@ class PinnedViewer(QWidget):
         self._act_text.triggered.connect(lambda:   self._set_tool(Tool.TEXT))
         act_color.triggered.connect(self._pick_color)
         act_trans.triggered.connect(self._start_translation)
+        self._act_pin.triggered.connect(self._toggle_pin)
+        act_copy.triggered.connect(self._copy_image)
         act_save.triggered.connect(self._save_image)
         act_close.triggered.connect(self._on_close)
 
@@ -193,6 +211,33 @@ class PinnedViewer(QWidget):
             sel_btn.setMinimumWidth(TOOLBAR_HEIGHT * 2)
 
         return tb
+
+    # ── Pin / window level ────────────────────────────────────────────────
+
+    def _apply_window_flags(self):
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        if self._pinned:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def _toggle_pin(self):
+        self._set_pinned(self._act_pin.isChecked())
+
+    def _set_pinned(self, pinned: bool):
+        if pinned == self._pinned:
+            self._act_pin.setChecked(pinned)
+            return
+        self._pinned = pinned
+        self._act_pin.setChecked(pinned)
+        self._apply_window_flags()
+        self.show()
+        if pinned:
+            if sys.platform == "darwin":
+                self._macos_topmost_applied = False
+                self._apply_macos_topmost()
+        elif sys.platform == "darwin":
+            self._clear_macos_topmost()
 
     # ── Tool selection ────────────────────────────────────────────────────
 
@@ -491,12 +536,13 @@ class PinnedViewer(QWidget):
                 self._interaction = "move"
                 self.update()
                 return
-            # 3) empty area → deselect & drag the window.
-            # Use GLOBAL coords: the window moves under the cursor, so widget-
-            # local coords would shift each event and lag behind the cursor.
+            # 3) empty area → deselect; drag window only when pinned.
             self._selected = None
-            self._interaction = "window"
-            self._win_drag_offset = event.globalPosition().toPoint() - self.pos()
+            if self._pinned:
+                self._interaction = "window"
+                self._win_drag_offset = (
+                    event.globalPosition().toPoint() - self.pos()
+                )
             self.update()
             return
 
