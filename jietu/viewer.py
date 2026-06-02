@@ -27,8 +27,9 @@ class PinnedViewer(QWidget):
 
     closed = pyqtSignal()
 
-    def __init__(self, pixmap: QPixmap):
+    def __init__(self, pixmap: QPixmap, *, capture_session: bool = False):
         super().__init__()
+        self._capture_session = capture_session
         self._base = pixmap.copy()
         # Work in PURE physical pixels internally: remember the scale (for window
         # sizing) and reset DPR to 1 so painting has no high-DPI source-rect
@@ -216,10 +217,32 @@ class PinnedViewer(QWidget):
 
     def _apply_window_flags(self):
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-        if self._pinned:
+        if self._pinned or self._capture_session:
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def set_capture_session(self, active: bool):
+        if self._capture_session == active:
+            return
+        self._capture_session = active
+        self._apply_window_flags()
+        self.show()
+
+    def set_capture(self, pixmap: QPixmap, top_left: QPoint):
+        """Replace image and resize while the user is still adjusting the crop."""
+        self._base = pixmap.copy()
+        self._dpr = self._base.devicePixelRatio() or 1.0
+        self._base.setDevicePixelRatio(1.0)
+        self._hq_pix = None
+        self._hq_key = None
+        self._hq_pending = None
+        lw = round(self._base.width() / self._dpr)
+        lh = round(self._base.height() / self._dpr)
+        m = SHADOW_MARGIN
+        self.resize(lw + 2 * m, lh + TOOLBAR_HEIGHT + 2 * m)
+        self.place_at(top_left)
+        self.update()
 
     def _toggle_pin(self):
         self._set_pinned(self._act_pin.isChecked())

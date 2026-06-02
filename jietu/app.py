@@ -32,6 +32,7 @@ class App(QWidget):
         self._is_child = is_child  # if True, exit 0 on user quit so watchdog stops
         self._viewers: list[PinnedViewer] = []
         self._overlay: CaptureOverlay | None = None
+        self._draft_viewer: PinnedViewer | None = None
         self._pending_restart = False
 
         self._upgrading = False
@@ -120,22 +121,72 @@ class App(QWidget):
         if self._overlay:
             return
         self._overlay = CaptureOverlay()
+        self._overlay.draft.connect(self._on_capture_draft)
+        self._overlay.draft_cleared.connect(self._on_capture_draft_cleared)
         self._overlay.captured.connect(self._on_captured)
         self._overlay.cancelled.connect(self._on_capture_cancelled)
 
-    def _on_captured(self, pixmap, rect: QRect):
-        self._overlay = None
-        viewer = PinnedViewer(pixmap)
-        viewer.place_at(rect.topLeft())
+    def _open_viewer(self, pixmap, rect: QRect, *, capture_session: bool) -> PinnedViewer:
+        viewer = PinnedViewer(pixmap, capture_session=capture_session)
+        viewer.set_capture(pixmap, rect.topLeft())
         viewer.closed.connect(lambda v=viewer: self._on_viewer_closed(v))
         viewer.show()
+        viewer.raise_()
+        viewer.activateWindow()
         self._viewers.append(viewer)
+        return viewer
+
+    def _on_capture_draft(self, pixmap, rect: QRect):
+        if self._draft_viewer is not None:
+            self._draft_viewer.set_capture(pixmap, rect.topLeft())
+            self._draft_viewer.raise_()
+            return
+        if self._overlay is None:
+            return
+        self._draft_viewer = self._open_viewer(pixmap, rect, capture_session=True)
+        self._overlay.draft_viewer = self._draft_viewer
+
+    def _on_capture_draft_cleared(self):
+        if self._draft_viewer is None:
+            return
+        viewer = self._draft_viewer
+        self._draft_viewer = None
+        if self._overlay is not None:
+            self._overlay.draft_viewer = None
+        self._viewers.remove(viewer)
+        viewer.closed.disconnect()
+        viewer.close()
+
+    def _on_captured(self, pixmap, rect: QRect):
+        overlay = self._overlay
+        draft = self._draft_viewer
+        self._overlay = None
+        self._draft_viewer = None
+        if overlay is not None:
+            overlay.draft_viewer = None
+        if draft is not None:
+            draft.set_capture(pixmap, rect.topLeft())
+            draft.set_capture_session(False)
+            return
+        self._open_viewer(pixmap, rect, capture_session=False)
 
     def _on_capture_cancelled(self):
         self._overlay = None
+        if self._draft_viewer is not None:
+            viewer = self._draft_viewer
+            self._draft_viewer = None
+            if viewer in self._viewers:
+                self._viewers.remove(viewer)
+            viewer.closed.disconnect()
+            viewer.close()
 
     def _on_viewer_closed(self, viewer: PinnedViewer):
-        self._viewers.remove(viewer)
+        if viewer in self._viewers:
+            self._viewers.remove(viewer)
+        if viewer is self._draft_viewer:
+            self._draft_viewer = None
+            if self._overlay is not None:
+                self._overlay.request_cancel()
         if self._pending_restart and not self._viewers:
             self._launch_upgrade()
 

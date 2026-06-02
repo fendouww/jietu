@@ -11,7 +11,7 @@ from __future__ import annotations
 import sys
 import mss
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtCore import Qt, QRect, QRectF, QPoint, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QRect, QRectF, QPoint, QObject, pyqtSignal, QTimer
 from PyQt6.QtGui import QPainter, QColor, QPixmap, QImage, QGuiApplication, QPen
 
 
@@ -22,6 +22,8 @@ class _ScreenOverlay(QWidget):
     """Translucent overlay covering ONE screen; drag to select a region."""
 
     selected = pyqtSignal(QPixmap, QRect)   # cropped pixmap, GLOBAL logical rect
+    draft = pyqtSignal(QPixmap, QRect)      # first adjust — open editor + toolbar
+    draft_cleared = pyqtSignal()
     cancelled = pyqtSignal()
     adjusting = pyqtSignal(object)          # self — other screens should close
 
@@ -56,6 +58,10 @@ class _ScreenOverlay(QWidget):
         self.activateWindow()
         self.raise_()
         self.setFocus()
+
+        self._draft_timer = QTimer(self)
+        self._draft_timer.setSingleShot(True)
+        self._draft_timer.timeout.connect(self._emit_draft)
 
     # ── Selection helpers ─────────────────────────────────────────────────
 
@@ -104,15 +110,29 @@ class _ScreenOverlay(QWidget):
         rect = QRect(QPoint(l, t), QPoint(r, b)).normalized()
         return rect.intersected(self.rect())
 
-    def _confirm_selection(self):
+    def _crop_payload(self) -> tuple[QPixmap, QRect] | None:
         sel = self._sel
         if sel is None or sel.width() <= 5 or sel.height() <= 5:
-            return
+            return None
         phys = self._to_physical(sel)
         cropped = self._pix.copy(phys)
         cropped.setDevicePixelRatio(self._scale_x)
         global_rect = sel.translated(self._screen_origin)
-        self.selected.emit(cropped, global_rect)
+        return cropped, global_rect
+
+    def _emit_draft(self):
+        payload = self._crop_payload()
+        if payload is not None:
+            self.draft.emit(*payload)
+
+    def _schedule_draft(self):
+        self._draft_timer.start(30)
+
+    def _confirm_selection(self):
+        payload = self._crop_payload()
+        if payload is None:
+            return
+        self.selected.emit(*payload)
 
     def _enter_adjust(self, sel: QRect):
         self._sel = sel
@@ -121,6 +141,7 @@ class _ScreenOverlay(QWidget):
         self._current = None
         self.adjusting.emit(self)
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self._emit_draft()
         self.update()
 
     # ── Events ────────────────────────────────────────────────────────────
@@ -152,6 +173,7 @@ class _ScreenOverlay(QWidget):
             self._mode = "drag"
             self._sel = None
             self.setCursor(Qt.CursorShape.CrossCursor)
+            self.draft_cleared.emit()
 
         self._origin = pos
         self._current = pos
@@ -166,6 +188,7 @@ class _ScreenOverlay(QWidget):
                 self._press_pos = pos
             elif self._interaction == "resize" and self._orig_sel is not None:
                 self._sel = self._resized_rect(self._orig_sel, pos)
+            self._schedule_draft()
             self.update()
             return
 
@@ -182,6 +205,7 @@ class _ScreenOverlay(QWidget):
             self._resize_idx = -1
             self._orig_sel = None
             self._press_pos = None
+            self._emit_draft()
             return
 
         if not self._origin:
@@ -229,7 +253,7 @@ class _ScreenOverlay(QWidget):
                                  HANDLE, HANDLE)
 
         painter.setPen(QColor(255, 255, 255))
-        hint = "双击确认 · Enter" if self._mode == "adjust" else ""
+        hint = "Enter 完成选区" if self._mode == "adjust" else ""
         painter.drawText(sel.x() + 4, max(14, sel.y() - 6),
                          f"{sel.width()} × {sel.height()}  {hint}".strip())
 
@@ -238,13 +262,21 @@ class CaptureOverlay(QObject):
     """Creates one overlay per screen and forwards the first selection."""
 
     captured = pyqtSignal(QPixmap, QRect)
+    draft = pyqtSignal(QPixmap, QRect)
+    draft_cleared = pyqtSignal()
     cancelled = pyqtSignal()
 
     def __init__(self):
         super().__init__()
         self._overlays: list[_ScreenOverlay] = []
         self._done = False
+        self.draft_viewer = None
         self._build()
+
+    def request_cancel(self):
+        """Cancel from the editor (e.g. user closed window during crop adjust)."""
+        if not self._done:
+            self._on_cancelled()
 
     def _build(self):
         # macOS: native Quartz grab guarantees full Retina resolution (mss can
@@ -260,6 +292,8 @@ class CaptureOverlay(QObject):
         for screen, pix in pairs:
             ov = _ScreenOverlay(screen, pix)
             ov.selected.connect(self._on_selected)
+            ov.draft.connect(self.draft.emit)
+            ov.draft_cleared.connect(self.draft_cleared.emit)
             ov.cancelled.connect(self._on_cancelled)
             ov.adjusting.connect(self._on_adjusting)
             self._overlays.append(ov)
