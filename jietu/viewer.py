@@ -17,8 +17,9 @@ from jietu.annotator import Annotation, Tool, render_annotation
 from jietu.translator import TranslateWorker
 
 
-TOOLBAR_HEIGHT = 27   # half of the previous 54
-HANDLE_SIZE = 9
+TOOLBAR_HEIGHT = 40   # 27 enlarged by ~50%
+HANDLE_SIZE = 10
+SHADOW_MARGIN = 14    # transparent margin around the screenshot for a drop shadow
 
 
 class PinnedViewer(QWidget):
@@ -41,7 +42,11 @@ class PinnedViewer(QWidget):
 
         self._tool = Tool.SELECT
         self._color = QColor(255, 50, 50)
-        self._pen_width = 4   # default line thickness (2x)
+        # Annotation sizes are stored in PHYSICAL px; scale defaults by the
+        # capture's DPR so the on-screen (logical) size is the SAME on every
+        # display (e.g. Retina 2x vs Windows 1x), instead of looking 2x bigger
+        # on low-DPI screens.
+        self._pen_width = max(1, round(2 * self._dpr))   # ~2 logical px
         self._drawing: Annotation | None = None
         self._drag_offset: QPoint | None = None
         self._win_drag_offset: QPoint | None = None
@@ -100,36 +105,40 @@ class PinnedViewer(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        # Translucent so the SHADOW_MARGIN around the content can show a soft
+        # drop shadow that separates the screenshot from the background.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # _base holds FULL physical-resolution pixels (DPR reset to 1).
-        # Window must be sized in LOGICAL pixels = physical / dpr.
+        # Window must be sized in LOGICAL pixels = physical / dpr, plus the
+        # shadow margin on every side.
         lw = round(self._base.width() / self._dpr)
         lh = round(self._base.height() / self._dpr)
-        self.resize(lw, lh + TOOLBAR_HEIGHT)
+        m = SHADOW_MARGIN
+        self.resize(lw + 2 * m, lh + TOOLBAR_HEIGHT + 2 * m)
 
-        # Toolbar sits at the BOTTOM, below the screenshot canvas.
+        # Toolbar sits at the BOTTOM, below the screenshot canvas (inside margin).
         self._toolbar = self._build_toolbar()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(m, m, m, m)
         layout.setSpacing(0)
         layout.addStretch(1)            # canvas area (painted manually)
         layout.addWidget(self._toolbar)  # toolbar pinned to bottom
 
         grip = QSizeGrip(self)
         grip.resize(16, 16)
-        grip.move(lw - 16, lh - 16)  # repositioned in resizeEvent
+        grip.move(lw + m - 16, lh + m - 16)  # repositioned in resizeEvent
 
-        self.setMinimumSize(80, 60 + TOOLBAR_HEIGHT)
+        self.setMinimumSize(80 + 2 * m, 60 + TOOLBAR_HEIGHT + 2 * m)
 
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar()
         tb.setFixedHeight(TOOLBAR_HEIGHT)
-        tb.setIconSize(QSize(14, 14))
+        tb.setIconSize(QSize(21, 21))
         tb.setStyleSheet(
-            "QToolBar { background:#222; border:none; spacing:2px; }"
-            "QToolButton { color:white; font-size:11px; padding:1px 5px; border:none; }"
+            "QToolBar { background:#222; border-radius:4px; border:none; spacing:2px; }"
+            "QToolButton { color:white; font-size:16px; padding:2px 8px; border:none; }"
             "QToolButton:checked { background:#555; border-radius:3px; }"
             "QToolButton:hover { background:#444; border-radius:3px; }"
         )
@@ -211,11 +220,26 @@ class PinnedViewer(QWidget):
     # ── Paint ─────────────────────────────────────────────────────────────
 
     def _canvas_rect(self) -> QRect:
-        # Canvas is the top area; toolbar occupies the bottom TOOLBAR_HEIGHT px.
-        return QRect(0, 0, self.width(), self.height() - TOOLBAR_HEIGHT)
+        # Canvas is inset by the shadow margin; toolbar occupies the bottom.
+        m = SHADOW_MARGIN
+        return QRect(m, m,
+                     self.width() - 2 * m,
+                     self.height() - TOOLBAR_HEIGHT - 2 * m)
 
     def paintEvent(self, _event):
         painter = QPainter(self)
+        # Soft drop shadow around the content rect (image + toolbar) so the
+        # screenshot stands out from whatever is behind it.
+        m = SHADOW_MARGIN
+        content = QRect(m, m, self.width() - 2 * m, self.height() - 2 * m)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for i in range(m):
+            alpha = int(70 * (1 - i / m) ** 2)
+            painter.setPen(QColor(0, 0, 0, alpha))
+            r = content.adjusted(-i, -i + 1, i, i + 1)  # bias downward slightly
+            painter.drawRoundedRect(r, 6, 6)
+
         cr = self._canvas_rect()
 
         try:
@@ -425,7 +449,12 @@ class PinnedViewer(QWidget):
         return None
 
     def _in_canvas(self, pos: QPoint) -> bool:
-        return pos.y() < self.height() - TOOLBAR_HEIGHT
+        return self._canvas_rect().contains(pos)
+
+    def place_at(self, top_left: QPoint):
+        """Position the window so the IMAGE (not the shadow margin) lands at
+        the given global point."""
+        self.move(top_left.x() - SHADOW_MARGIN, top_left.y() - SHADOW_MARGIN)
 
     def mousePressEvent(self, event):
         # Right-click = switch to the Select tool and pick the annotation
@@ -612,7 +641,7 @@ class PinnedViewer(QWidget):
             color = existing.color
         else:
             self._editing_ann = None
-            font_px_img = max(40, self._pen_width * 10)   # default font size (2x of old)
+            font_px_img = max(12, round(20 * self._dpr))  # ~20 logical px (DPR-consistent)
             text = ""
             color = QColor(self._color)
 
@@ -804,4 +833,5 @@ class PinnedViewer(QWidget):
         # Keep grip at the canvas bottom-right, just above the bottom toolbar.
         for child in self.children():
             if isinstance(child, QSizeGrip):
-                child.move(self.width() - 16, self.height() - TOOLBAR_HEIGHT - 16)
+                child.move(self.width() - SHADOW_MARGIN - 16,
+                           self.height() - TOOLBAR_HEIGHT - SHADOW_MARGIN - 16)

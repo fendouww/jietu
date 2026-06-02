@@ -126,7 +126,7 @@ class App(QWidget):
     def _on_captured(self, pixmap, rect: QRect):
         self._overlay = None
         viewer = PinnedViewer(pixmap)
-        viewer.move(rect.topLeft())
+        viewer.place_at(rect.topLeft())
         viewer.closed.connect(lambda v=viewer: self._on_viewer_closed(v))
         viewer.show()
         self._viewers.append(viewer)
