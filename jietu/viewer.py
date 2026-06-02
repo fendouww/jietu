@@ -641,7 +641,7 @@ class PinnedViewer(QWidget):
             color = existing.color
         else:
             self._editing_ann = None
-            font_px_img = max(12, round(20 * self._dpr))  # ~20 logical px (DPR-consistent)
+            font_px_img = max(14, round(24 * self._dpr))  # ~24 logical px (DPR-consistent)
             text = ""
             color = QColor(self._color)
 
