@@ -1,0 +1,16 @@
+---
+description: 代码修改完成后提交并推送到 GitHub，便于用户从云端升级
+alwaysApply: true
+---
+
+# 修改后推送到云端
+
+完成本仓库（jietu）的功能或修复类代码改动后，在同一轮对话内：
+
+1. `git status` / `git diff` 确认变更
+2. 用简洁的 commit message 提交（用户未明确要求时不要 amend）
+3. `git push origin master`（或当前分支的 upstream）
+
+若 push 因认证失败，向用户说明本地 commit 已完成，并给出需执行的 `git push` 命令，不要假装已推送成功。
+
+用户通过 GitHub 仓库 `fendouww/jietu` 进行「升级到最新版」。
