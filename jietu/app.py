@@ -11,6 +11,7 @@ from jietu.hotkey import GlobalHotkey
 from jietu import translator
 from jietu import upgrade
 import jietu.startup as startup
+from jietu import settings
 
 
 def _default_icon() -> QIcon:
@@ -33,11 +34,12 @@ class App(QWidget):
         self._viewers: list[PinnedViewer] = []
         self._overlay: CaptureOverlay | None = None
         self._draft_viewer: PinnedViewer | None = None
-        self._pending_restart = False
+        self._pending_upgrade_version: str | None = None
 
         self._upgrading = False
         self._updater = UpdateChecker()
         self._updater.upgrade_requested.connect(self._do_upgrade)
+        self._updater.update_available.connect(self._on_update_available)
         self._updater.up_to_date.connect(self._on_up_to_date)
 
         self._tray = QSystemTrayIcon(self)
@@ -58,7 +60,8 @@ class App(QWidget):
                 5000,
             )
 
-        self._updater.check_async()
+        self._updater.check_async(force=True)
+        self._updater.start_periodic_checks()
 
         # Warm up the OCR model in the background so the first translation
         # doesn't pay the one-time model-load cost.
@@ -90,6 +93,11 @@ class App(QWidget):
         self._act_upgrade = QAction("升级到最新版", self)
         self._act_upgrade.triggered.connect(self._updater.manual_upgrade)
 
+        self._act_auto_upgrade = QAction("自动升级", self)
+        self._act_auto_upgrade.setCheckable(True)
+        self._act_auto_upgrade.setChecked(settings.auto_upgrade_enabled())
+        self._act_auto_upgrade.triggered.connect(self._toggle_auto_upgrade)
+
         act_quit = QAction("退出", self)
         act_quit.triggered.connect(self._quit)
 
@@ -98,9 +106,15 @@ class App(QWidget):
         menu.addAction(self._act_autostart)
         menu.addAction(self._act_check)
         menu.addAction(self._act_upgrade)
+        menu.addAction(self._act_auto_upgrade)
         menu.addSeparator()
         menu.addAction(act_quit)
         return menu
+
+    def _toggle_auto_upgrade(self):
+        settings.set_auto_upgrade(self._act_auto_upgrade.isChecked())
+        if self._act_auto_upgrade.isChecked():
+            self._updater.check_async(force=True)
 
     def _toggle_autostart(self):
         try:
@@ -179,6 +193,7 @@ class App(QWidget):
                 self._viewers.remove(viewer)
             viewer.closed.disconnect()
             viewer.close()
+        self._try_pending_upgrade()
 
     def _on_viewer_closed(self, viewer: PinnedViewer):
         if viewer in self._viewers:
@@ -187,8 +202,16 @@ class App(QWidget):
             self._draft_viewer = None
             if self._overlay is not None:
                 self._overlay.request_cancel()
-        if self._pending_restart and not self._viewers:
-            self._launch_upgrade()
+        self._try_pending_upgrade()
+
+    def _is_busy(self) -> bool:
+        return bool(self._viewers or self._overlay)
+
+    def _try_pending_upgrade(self):
+        if self._pending_upgrade_version and not self._is_busy():
+            version = self._pending_upgrade_version
+            self._pending_upgrade_version = None
+            self._do_upgrade(version)
 
     def _quit(self):
         # Release the exclusive hotkey before exiting.
@@ -205,32 +228,40 @@ class App(QWidget):
             QSystemTrayIcon.MessageIcon.Information, 2500,
         )
 
+    def _on_update_available(self, version: str):
+        self._tray.showMessage(
+            "jietu 有新版本",
+            f"发现 v{version}，托盘菜单可开启「自动升级」或手动升级。",
+            QSystemTrayIcon.MessageIcon.Information, 5000,
+        )
+
     def _do_upgrade(self, version: str):
         """Start the detached upgrader (kills running jietu, reinstalls, restarts)."""
         if self._upgrading:
             return
-        self._upgrading = True
-        if self._viewers:
-            # Don't interrupt pinned screenshots — upgrade after they're closed.
-            self._pending_restart = True
+        if self._is_busy():
+            self._pending_upgrade_version = version or self._pending_upgrade_version or ""
             self._tray.showMessage(
                 "jietu 有新版本",
-                "关闭所有截图后将自动升级并重启。",
+                "当前截图结束后将自动升级并重启。",
                 QSystemTrayIcon.MessageIcon.Information, 4000,
             )
-            self._upgrading = False
             return
 
-        msg = f"正在升级到 v{version}…" if version else "正在升级到最新版…"
-        self._tray.showMessage("jietu 升级", msg + "稍后自动重启。",
-                               QSystemTrayIcon.MessageIcon.Information, 4000)
-        self._launch_upgrade()
+        self._upgrading = True
+        label = f"v{version}" if version else "最新版"
+        self._tray.showMessage(
+            "jietu 自动升级",
+            f"正在升级到 {label}，稍后自动重启…",
+            QSystemTrayIcon.MessageIcon.Information, 4000,
+        )
+        self._launch_upgrade(version)
 
-    def _launch_upgrade(self):
+    def _launch_upgrade(self, target_version: str = ""):
         # Spawn the detached upgrader, release the hotkey, then quit so the
         # upgrader can replace the locked files and relaunch us.
         try:
-            upgrade.spawn_detached()
+            upgrade.spawn_detached(target_version)
         except Exception as e:
             self._tray.showMessage("升级失败", str(e),
                                    QSystemTrayIcon.MessageIcon.Warning, 4000)

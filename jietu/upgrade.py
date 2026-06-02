@@ -64,16 +64,28 @@ def run():
     _kill_running(os.getpid())
     time.sleep(0.8)                 # wait for file locks to release
     py, _pyw = _python_exes()
-    subprocess.run(
+    result = subprocess.run(
         [py, "-m", "pip", "install", "--upgrade", "--force-reinstall",
          "--no-deps", REPO],
         capture_output=True,
     )
+    if result.returncode != 0:
+        target = os.environ.get("JIETU_UPGRADE_VERSION", "")
+        if target:
+            try:
+                from jietu.updater import mark_upgrade_failed
+                mark_upgrade_failed(target)
+            except Exception:
+                pass
+        return
     _relaunch()
 
 
-def spawn_detached():
+def spawn_detached(target_version: str = ""):
     """Launch this module as a detached process that survives the app exiting."""
+    env = os.environ.copy()
+    if target_version:
+        env["JIETU_UPGRADE_VERSION"] = target_version
     _py, pyw = _python_exes()
     if sys.platform == "win32":
         DETACHED_PROCESS = 0x00000008
@@ -82,10 +94,11 @@ def spawn_detached():
             [pyw, "-m", "jietu.upgrade"],
             creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
             close_fds=True,
+            env=env,
         )
     else:
         subprocess.Popen([pyw, "-m", "jietu.upgrade"],
-                         start_new_session=True)
+                         start_new_session=True, env=env)
 
 
 if __name__ == "__main__":
