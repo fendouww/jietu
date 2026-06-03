@@ -1,12 +1,14 @@
 """System-wide global hotkey.
 
-Windows: WH_KEYBOARD_LL low-level hook — blocks Alt+` before other apps see it.
-macOS: HID CGEventTap on the main run loop — returns None to consume Option+`.
+Windows: WH_KEYBOARD_LL blocks Alt+`; hidden QWidget receives PostMessage.
+macOS: HID CGEventTap consumes Option+` (mask built with 1<<type, not CGEventMaskBit).
 """
 from __future__ import annotations
 import sys
 import time
-from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtWidgets import QWidget
+from PyQt6.QtCore import Qt
 
 _MODS = {
     "alt": 0x0001, "option": 0x0001,
@@ -15,7 +17,6 @@ _MODS = {
     "win": 0x0008, "super": 0x0008, "cmd": 0x0008,
 }
 _MOD_NOREPEAT = 0x4000
-_WM_HOTKEY = 0x0312
 
 _VK = {
     "`": 0xC0, "~": 0xC0,
@@ -72,8 +73,17 @@ def _parse_combo(combo: str) -> tuple[int, int]:
     return mods | _MOD_NOREPEAT, vk
 
 
+def _cg_mask(*event_types: int) -> int:
+    """Build CGEventMask without CGEventMaskBit (breaks on tap-disabled types)."""
+    mask = 0
+    for t in event_types:
+        if 0 <= t < 64:
+            mask |= 1 << t
+    return mask
+
+
 def ensure_mac_event_environment() -> bool:
-    """Tray/background app must be an NSApplication agent."""
+    """Tray app: accessory policy after QApplication has started."""
     global _mac_appkit_ready
     if sys.platform != "darwin" or _mac_appkit_ready:
         return _mac_appkit_ready
@@ -83,7 +93,6 @@ def ensure_mac_event_environment() -> bool:
         nsapp.setActivationPolicy_(
             AppKit.NSApplicationActivationPolicyAccessory,
         )
-        AppKit.NSApp.finishLaunching()
         _mac_appkit_ready = True
         return True
     except Exception:
@@ -132,38 +141,50 @@ def _quartz_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> bool
     return (flags & extra) == 0
 
 
-class _WinHookMsgFilter(QAbstractNativeEventFilter):
-    """Deliver hotkey posts from the low-level keyboard hook to Qt."""
+class _WinMsgSink(QWidget):
+    """Native HWND target for PostMessage / RegisterHotKey delivery."""
 
-    def __init__(self, msg_id: int, callback):
+    def __init__(self, on_fire, hotkey_id: int | None = None):
         super().__init__()
-        self._msg_id = msg_id
-        self._cb = callback
+        self._on_fire = on_fire
+        self._hotkey_id = hotkey_id
+        self.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint,
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.resize(1, 1)
 
-    def nativeEventFilter(self, eventType, message):
+    def nativeEvent(self, eventType, message):
         if eventType == b"windows_generic_MSG":
             import ctypes
             from ctypes import wintypes
             msg = wintypes.MSG.from_address(int(message))
-            if msg.message == self._msg_id:
-                self._cb()
+            if msg.message == GlobalHotkey._WM_JIETU:
+                self._on_fire()
+            elif (
+                self._hotkey_id is not None
+                and msg.message == 0x0312
+                and msg.wParam == self._hotkey_id
+            ):
+                self._on_fire()
         return False, 0
 
 
 class GlobalHotkey(QObject):
     triggered = pyqtSignal()
 
-    _WM_JIETU = 0x8000 + 0xB001   # private — posted from WH_KEYBOARD_LL
+    _WM_JIETU = 0x8000 + 0xB001
 
     def __init__(self, combo: str = HOTKEY_COMBO):
         super().__init__()
         self._combo = combo
         self._alt_grave = _is_alt_grave_combo(combo)
-        self._filter = None
         self._listener = None
         self._win_hook = None
         self._hook_proc_ref = None
-        self._win_thread_id = 0
+        self._win_sink: _WinMsgSink | None = None
+        self._win_hwnd = 0
+        self._win_hotkey_id: int | None = None
         self._win_vk = 0
         self._win_need_alt = False
         self._win_need_ctrl = False
@@ -181,7 +202,7 @@ class GlobalHotkey(QObject):
         if now - self._last_fire < _DEBOUNCE_SEC:
             return
         self._last_fire = now
-        self.triggered.emit()
+        QTimer.singleShot(0, self.triggered.emit)
 
     def register(self) -> bool:
         if sys.platform == "darwin":
@@ -198,7 +219,7 @@ class GlobalHotkey(QObject):
             self._unregister_win()
         self._teardown_mac_tap()
 
-    # ── macOS: exclusive HID event tap (consumes the shortcut) ───────────────
+    # ── macOS ────────────────────────────────────────────────────────────────
 
     def _register_mac_exclusive(self) -> bool:
         try:
@@ -215,46 +236,50 @@ class GlobalHotkey(QObject):
         self._key_codes = key_codes
         self._need_mask = _mac_flag_mask(mods & 0x000F)
 
-        mask = (
-            Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
-            | Quartz.CGEventMaskBit(Quartz.kCGEventTapDisabledByTimeout)
-            | Quartz.CGEventMaskBit(Quartz.kCGEventTapDisabledByUserInput)
-        )
+        # Only key-down in the mask; disabled-tap types use huge IDs and break pyobjc.
+        mask = _cg_mask(Quartz.kCGEventKeyDown)
+        hotkey_self = self
 
         def callback(proxy, type_, event, refcon):
+            import Quartz as Q
             try:
                 if type_ in (
-                    Quartz.kCGEventTapDisabledByTimeout,
-                    Quartz.kCGEventTapDisabledByUserInput,
+                    Q.kCGEventTapDisabledByTimeout,
+                    Q.kCGEventTapDisabledByUserInput,
                 ):
-                    if self._mac_tap is not None:
-                        Quartz.CGEventTapEnable(self._mac_tap, True)
+                    if hotkey_self._mac_tap is not None:
+                        Q.CGEventTapEnable(hotkey_self._mac_tap, True)
                     return event
-                if type_ != Quartz.kCGEventKeyDown:
+                if type_ != Q.kCGEventKeyDown:
                     return event
-                flags = Quartz.CGEventGetFlags(event)
-                kc = Quartz.CGEventGetIntegerValueField(
-                    event, Quartz.kCGKeyboardEventKeycode,
+                flags = Q.CGEventGetFlags(event)
+                kc = Q.CGEventGetIntegerValueField(
+                    event, Q.kCGKeyboardEventKeycode,
                 )
-                if not self._key_match(kc):
+                if not hotkey_self._key_match(kc):
                     return event
                 if not _quartz_modifiers_ok(
-                    flags, self._need_mask, alt_grave=self._alt_grave,
+                    flags, hotkey_self._need_mask,
+                    alt_grave=hotkey_self._alt_grave,
                 ):
                     return event
-                self._emit_triggered()
-                return None   # consume — other apps never see Option+`
+                hotkey_self._emit_triggered()
+                return None
             except Exception:
                 return event
 
-        tap = Quartz.CGEventTapCreate(
-            Quartz.kCGHIDEventTap,
-            Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionDefault,
-            mask,
-            callback,
-            None,
-        )
+        try:
+            tap = Quartz.CGEventTapCreate(
+                Quartz.kCGHIDEventTap,
+                Quartz.kCGHeadInsertEventTap,
+                Quartz.kCGEventTapOptionDefault,
+                mask,
+                callback,
+                None,
+            )
+        except (ValueError, TypeError, OverflowError):
+            tap = None
+
         if tap is None:
             return False
 
@@ -310,7 +335,7 @@ class GlobalHotkey(QObject):
         self._mac_tap = None
         self._mac_tap_source = None
 
-    # ── Windows: WH_KEYBOARD_LL (consume Alt+` globally) ─────────────────────
+    # ── Windows ───────────────────────────────────────────────────────────────
 
     def _win_modifiers_ok(self) -> bool:
         import ctypes
@@ -319,9 +344,9 @@ class GlobalHotkey(QObject):
         def down(vk: int) -> bool:
             return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
-        alt = down(0x12)      # VK_MENU
-        ctrl = down(0x11)     # VK_CONTROL
-        shift = down(0x10)    # VK_SHIFT
+        alt = down(0x12)
+        ctrl = down(0x11)
+        shift = down(0x10)
         win = down(0x5B) or down(0x5C)
 
         if self._win_need_alt and not alt:
@@ -341,7 +366,6 @@ class GlobalHotkey(QObject):
     def _register_win_exclusive(self) -> bool:
         import ctypes
         from ctypes import wintypes
-        from PyQt6.QtWidgets import QApplication
 
         try:
             mods, vk = _parse_combo(self._combo)
@@ -352,7 +376,12 @@ class GlobalHotkey(QObject):
         self._win_need_alt = bool(mods & 0x0001)
         self._win_need_ctrl = bool(mods & 0x0002)
         self._win_need_shift = bool(mods & 0x0004)
-        self._win_thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+
+        self._win_sink = _WinMsgSink(self._emit_triggered)
+        self._win_sink.show()
+        self._win_hwnd = int(self._win_sink.winId())
+        if not self._win_hwnd:
+            return self._register_win_register_hotkey(mods, vk)
 
         WM_KEYDOWN = 0x0100
         WM_SYSKEYDOWN = 0x0104
@@ -379,12 +408,12 @@ class GlobalHotkey(QObject):
             if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 if kb.vkCode == hotkey_self._win_vk and hotkey_self._win_modifiers_ok():
-                    user32.PostThreadMessageW(
-                        hotkey_self._win_thread_id,
+                    user32.PostMessageW(
+                        hotkey_self._win_hwnd,
                         GlobalHotkey._WM_JIETU,
                         0, 0,
                     )
-                    return 1   # block — other apps never receive Alt+`
+                    return 1
             return user32.CallNextHookEx(hotkey_self._win_hook, nCode, wParam, lParam)
 
         self._hook_proc_ref = hook_proc
@@ -396,18 +425,28 @@ class GlobalHotkey(QObject):
         )
         if not self._win_hook:
             self._hook_proc_ref = None
-            return False
+            return self._register_win_register_hotkey(mods, vk)
+        return True
 
-        self._filter = _WinHookMsgFilter(self._WM_JIETU, self._emit_triggered)
-        QApplication.instance().installNativeEventFilter(self._filter)
+    def _register_win_register_hotkey(self, mods: int, vk: int) -> bool:
+        """Fallback when the low-level hook cannot be installed."""
+        import ctypes
+        user32 = ctypes.windll.user32
+        hotkey_id = 0xB001
+        if self._win_sink is not None:
+            self._win_sink.close()
+        self._win_sink = _WinMsgSink(self._emit_triggered, hotkey_id=hotkey_id)
+        self._win_sink.show()
+        self._win_hwnd = int(self._win_sink.winId())
+        if not self._win_hwnd:
+            return False
+        if not user32.RegisterHotKey(self._win_hwnd, hotkey_id, mods, vk):
+            return False
+        self._win_hotkey_id = hotkey_id
         return True
 
     def _unregister_win(self):
         import ctypes
-        from PyQt6.QtWidgets import QApplication
-        if self._filter:
-            QApplication.instance().removeNativeEventFilter(self._filter)
-            self._filter = None
         if self._win_hook:
             try:
                 ctypes.windll.user32.UnhookWindowsHookEx(self._win_hook)
@@ -415,8 +454,19 @@ class GlobalHotkey(QObject):
                 pass
             self._win_hook = None
         self._hook_proc_ref = None
+        hotkey_id = getattr(self, "_win_hotkey_id", None)
+        if hotkey_id is not None:
+            try:
+                ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
+            except Exception:
+                pass
+            self._win_hotkey_id = None
+        if self._win_sink is not None:
+            self._win_sink.close()
+            self._win_sink = None
+        self._win_hwnd = 0
 
-    # ── Linux fallback ──────────────────────────────────────────────────────
+    # ── Linux ─────────────────────────────────────────────────────────────────
 
     def _register_pynput(self) -> bool:
         try:
