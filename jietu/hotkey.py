@@ -1,8 +1,7 @@
 """System-wide global hotkey.
 
-Windows: Win32 RegisterHotKey (system-exclusive).
-macOS: HID CGEventTap on the main run loop — intercepts Option+` and returns None
-        so no other app receives the key (true global capture).
+Windows: WH_KEYBOARD_LL low-level hook — blocks Alt+` before other apps see it.
+macOS: HID CGEventTap on the main run loop — returns None to consume Option+`.
 """
 from __future__ import annotations
 import sys
@@ -133,10 +132,12 @@ def _quartz_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> bool
     return (flags & extra) == 0
 
 
-class _WinHotkeyFilter(QAbstractNativeEventFilter):
-    def __init__(self, hotkey_id: int, callback):
+class _WinHookMsgFilter(QAbstractNativeEventFilter):
+    """Deliver hotkey posts from the low-level keyboard hook to Qt."""
+
+    def __init__(self, msg_id: int, callback):
         super().__init__()
-        self._id = hotkey_id
+        self._msg_id = msg_id
         self._cb = callback
 
     def nativeEventFilter(self, eventType, message):
@@ -144,7 +145,7 @@ class _WinHotkeyFilter(QAbstractNativeEventFilter):
             import ctypes
             from ctypes import wintypes
             msg = wintypes.MSG.from_address(int(message))
-            if msg.message == _WM_HOTKEY and msg.wParam == self._id:
+            if msg.message == self._msg_id:
                 self._cb()
         return False, 0
 
@@ -152,7 +153,7 @@ class _WinHotkeyFilter(QAbstractNativeEventFilter):
 class GlobalHotkey(QObject):
     triggered = pyqtSignal()
 
-    _HOTKEY_ID = 0xB001
+    _WM_JIETU = 0x8000 + 0xB001   # private — posted from WH_KEYBOARD_LL
 
     def __init__(self, combo: str = HOTKEY_COMBO):
         super().__init__()
@@ -160,6 +161,13 @@ class GlobalHotkey(QObject):
         self._alt_grave = _is_alt_grave_combo(combo)
         self._filter = None
         self._listener = None
+        self._win_hook = None
+        self._hook_proc_ref = None
+        self._win_thread_id = 0
+        self._win_vk = 0
+        self._win_need_alt = False
+        self._win_need_ctrl = False
+        self._win_need_shift = False
         self._mac_tap = None
         self._mac_tap_source = None
         self._mac_health: QTimer | None = None
@@ -180,7 +188,7 @@ class GlobalHotkey(QObject):
             ensure_mac_event_environment()
             self._registered = self._register_mac_exclusive()
         elif sys.platform == "win32":
-            self._registered = self._register_win()
+            self._registered = self._register_win_exclusive()
         else:
             self._registered = self._register_pynput()
         return self._registered
@@ -302,19 +310,95 @@ class GlobalHotkey(QObject):
         self._mac_tap = None
         self._mac_tap_source = None
 
-    # ── Windows ───────────────────────────────────────────────────────────────
+    # ── Windows: WH_KEYBOARD_LL (consume Alt+` globally) ─────────────────────
 
-    def _register_win(self) -> bool:
+    def _win_modifiers_ok(self) -> bool:
         import ctypes
+        user32 = ctypes.windll.user32
+
+        def down(vk: int) -> bool:
+            return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+
+        alt = down(0x12)      # VK_MENU
+        ctrl = down(0x11)     # VK_CONTROL
+        shift = down(0x10)    # VK_SHIFT
+        win = down(0x5B) or down(0x5C)
+
+        if self._win_need_alt and not alt:
+            return False
+        if not self._win_need_alt and alt:
+            return False
+        if self._win_need_ctrl and not ctrl:
+            return False
+        if not self._win_need_ctrl and ctrl:
+            return False
+        if self._win_need_shift and not shift:
+            return False
+        if win:
+            return False
+        return True
+
+    def _register_win_exclusive(self) -> bool:
+        import ctypes
+        from ctypes import wintypes
         from PyQt6.QtWidgets import QApplication
+
         try:
             mods, vk = _parse_combo(self._combo)
         except ValueError:
             return False
+
+        self._win_vk = vk
+        self._win_need_alt = bool(mods & 0x0001)
+        self._win_need_ctrl = bool(mods & 0x0002)
+        self._win_need_shift = bool(mods & 0x0004)
+        self._win_thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+
+        WM_KEYDOWN = 0x0100
+        WM_SYSKEYDOWN = 0x0104
+        WH_KEYBOARD_LL = 13
+
+        class KBDLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("vkCode", wintypes.DWORD),
+                ("scanCode", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t),
+            ]
+
         user32 = ctypes.windll.user32
-        if not user32.RegisterHotKey(None, self._HOTKEY_ID, mods, vk):
+        kernel32 = ctypes.windll.kernel32
+        HOOKPROC = ctypes.WINFUNCTYPE(
+            ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM,
+        )
+        hotkey_self = self
+
+        @HOOKPROC
+        def hook_proc(nCode, wParam, lParam):
+            if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                if kb.vkCode == hotkey_self._win_vk and hotkey_self._win_modifiers_ok():
+                    user32.PostThreadMessageW(
+                        hotkey_self._win_thread_id,
+                        GlobalHotkey._WM_JIETU,
+                        0, 0,
+                    )
+                    return 1   # block — other apps never receive Alt+`
+            return user32.CallNextHookEx(hotkey_self._win_hook, nCode, wParam, lParam)
+
+        self._hook_proc_ref = hook_proc
+        self._win_hook = user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            hook_proc,
+            kernel32.GetModuleHandleW(None),
+            0,
+        )
+        if not self._win_hook:
+            self._hook_proc_ref = None
             return False
-        self._filter = _WinHotkeyFilter(self._HOTKEY_ID, self._emit_triggered)
+
+        self._filter = _WinHookMsgFilter(self._WM_JIETU, self._emit_triggered)
         QApplication.instance().installNativeEventFilter(self._filter)
         return True
 
@@ -324,10 +408,13 @@ class GlobalHotkey(QObject):
         if self._filter:
             QApplication.instance().removeNativeEventFilter(self._filter)
             self._filter = None
-        try:
-            ctypes.windll.user32.UnregisterHotKey(None, self._HOTKEY_ID)
-        except Exception:
-            pass
+        if self._win_hook:
+            try:
+                ctypes.windll.user32.UnhookWindowsHookEx(self._win_hook)
+            except Exception:
+                pass
+            self._win_hook = None
+        self._hook_proc_ref = None
 
     # ── Linux fallback ──────────────────────────────────────────────────────
 

@@ -82,7 +82,10 @@ class App(QWidget):
                 "完全退出后重启。需 Option 键（不是 Control）。"
             )
         else:
-            msg = f"{HOTKEY_LABEL} 已被其他程序独占，截图请点击托盘图标。"
+            msg = (
+                f"{HOTKEY_LABEL} 全局占用未生效，请完全退出后以管理员身份重试，"
+                "或点击托盘图标截图。"
+            )
         self._tray.showMessage(
             "快捷键未就绪",
             msg,
