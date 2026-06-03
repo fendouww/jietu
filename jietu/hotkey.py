@@ -50,6 +50,10 @@ _MAC_KEYCODES = {
 
 _DEBOUNCE_SEC = 0.35
 
+# Single source of truth for the global screenshot shortcut.
+HOTKEY_COMBO = "alt+`"
+HOTKEY_LABEL = "Alt+`"   # macOS 键盘上的 Option 键
+
 
 def _parse_combo(combo: str) -> tuple[int, int]:
     """'alt+`' / '<ctrl>+a' -> (modifiers, virtual_key). Raises on bad key."""
@@ -160,7 +164,7 @@ class GlobalHotkey(QObject):
 
     _HOTKEY_ID = 0xB001
 
-    def __init__(self, combo: str = "ctrl+`"):
+    def __init__(self, combo: str = HOTKEY_COMBO):
         super().__init__()
         self._combo = combo
         self._filter = None
@@ -181,12 +185,12 @@ class GlobalHotkey(QObject):
         if sys.platform == "win32":
             self._registered = self._register_win()
         elif sys.platform == "darwin":
-            # NSEvent + Quartz + pynput (Ctrl+` needs Quartz/pynput when Ctrl held).
-            self._registered = (
-                self._register_mac_nsevent()
-                or self._register_mac_quartz()
-                or self._register_pynput()
-            )
+            # Register all backends; Option+` is flaky with only one path on macOS.
+            ok = False
+            ok |= self._register_mac_nsevent()
+            ok |= self._register_mac_quartz()
+            ok |= self._register_pynput()
+            self._registered = ok
         else:
             self._registered = self._register_pynput()
         return self._registered

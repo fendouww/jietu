@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QRect
 from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
-from jietu.hotkey import GlobalHotkey
+from jietu.hotkey import GlobalHotkey, HOTKEY_COMBO, HOTKEY_LABEL
 from jietu import translator
 from jietu import upgrade
 import jietu.startup as startup
@@ -44,25 +44,25 @@ class App(QWidget):
 
         self._tray = QSystemTrayIcon(self)
         self._tray.setIcon(_default_icon())
-        self._tray.setToolTip("截图工具 (jietu)")
+        self._tray.setToolTip(f"截图工具 (jietu) — {HOTKEY_LABEL}")
         self._tray.setContextMenu(self._build_menu())
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
         # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
-        self._hotkey = GlobalHotkey("ctrl+`")
+        self._hotkey = GlobalHotkey(HOTKEY_COMBO)
         self._hotkey.triggered.connect(
             self._start_capture, Qt.ConnectionType.QueuedConnection,
         )
         if not self._hotkey.register():
             if sys.platform == "darwin":
                 msg = (
-                    "Ctrl+` 未生效：请在「系统设置 → 隐私与安全性」中"
+                    f"{HOTKEY_LABEL} 未生效：请在「系统设置 → 隐私与安全性」中"
                     "为运行 jietu 的 Python 开启「辅助功能」和「输入监控」，"
                     "然后完全退出并重启 jietu。"
                 )
             else:
-                msg = "Ctrl+` 已被其他程序独占，截图请点击托盘图标。"
+                msg = f"{HOTKEY_LABEL} 已被其他程序独占，截图请点击托盘图标。"
             self._tray.showMessage(
                 "快捷键未就绪",
                 msg,
@@ -89,7 +89,7 @@ class App(QWidget):
             "QMenu::item:selected { background:#444; }"
         )
 
-        act_capture = QAction("截图  Ctrl+`", self)
+        act_capture = QAction(f"截图  {HOTKEY_LABEL}", self)
         act_capture.triggered.connect(self._start_capture)
 
         self._act_autostart = QAction("开机自动启动", self)
