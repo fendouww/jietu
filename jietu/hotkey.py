@@ -113,7 +113,7 @@ class GlobalHotkey(QObject):
 
     _HOTKEY_ID = 0xB001
 
-    def __init__(self, combo: str = "ctrl+`"):
+    def __init__(self, combo: str = "alt+`"):
         super().__init__()
         self._combo = combo
         self._filter = None

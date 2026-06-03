@@ -50,12 +50,12 @@ class App(QWidget):
         self._tray.show()
 
         # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
-        self._hotkey = GlobalHotkey("ctrl+`")
+        self._hotkey = GlobalHotkey("alt+`")
         self._hotkey.triggered.connect(self._start_capture)
         if not self._hotkey.register():
             self._tray.showMessage(
                 "快捷键被占用",
-                "Ctrl+` 已被其他程序独占，截图请点击托盘图标。",
+                "Alt+` 已被其他程序独占，截图请点击托盘图标。",
                 QSystemTrayIcon.MessageIcon.Warning,
                 5000,
             )
@@ -79,7 +79,7 @@ class App(QWidget):
             "QMenu::item:selected { background:#444; }"
         )
 
-        act_capture = QAction("截图  Ctrl+`", self)
+        act_capture = QAction("截图  Alt+`", self)
         act_capture.triggered.connect(self._start_capture)
 
         self._act_autostart = QAction("开机自动启动", self)
