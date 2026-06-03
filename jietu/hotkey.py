@@ -160,7 +160,7 @@ class GlobalHotkey(QObject):
 
     _HOTKEY_ID = 0xB001
 
-    def __init__(self, combo: str = "alt+`"):
+    def __init__(self, combo: str = "ctrl+`"):
         super().__init__()
         self._combo = combo
         self._filter = None
@@ -181,11 +181,11 @@ class GlobalHotkey(QObject):
         if sys.platform == "win32":
             self._registered = self._register_win()
         elif sys.platform == "darwin":
-            # Option/Alt combos: NSEvent + pynput are more reliable than CGEventTap alone.
+            # NSEvent + Quartz + pynput (Ctrl+` needs Quartz/pynput when Ctrl held).
             self._registered = (
                 self._register_mac_nsevent()
-                or self._register_pynput()
                 or self._register_mac_quartz()
+                or self._register_pynput()
             )
         else:
             self._registered = self._register_pynput()

@@ -50,19 +50,19 @@ class App(QWidget):
         self._tray.show()
 
         # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
-        self._hotkey = GlobalHotkey("alt+`")
+        self._hotkey = GlobalHotkey("ctrl+`")
         self._hotkey.triggered.connect(
             self._start_capture, Qt.ConnectionType.QueuedConnection,
         )
         if not self._hotkey.register():
             if sys.platform == "darwin":
                 msg = (
-                    "Alt+` 未生效：请在「系统设置 → 隐私与安全性」中"
+                    "Ctrl+` 未生效：请在「系统设置 → 隐私与安全性」中"
                     "为运行 jietu 的 Python 开启「辅助功能」和「输入监控」，"
                     "然后完全退出并重启 jietu。"
                 )
             else:
-                msg = "Alt+` 已被其他程序独占，截图请点击托盘图标。"
+                msg = "Ctrl+` 已被其他程序独占，截图请点击托盘图标。"
             self._tray.showMessage(
                 "快捷键未就绪",
                 msg,
@@ -89,7 +89,7 @@ class App(QWidget):
             "QMenu::item:selected { background:#444; }"
         )
 
-        act_capture = QAction("截图  Alt+`", self)
+        act_capture = QAction("截图  Ctrl+`", self)
         act_capture.triggered.connect(self._start_capture)
 
         self._act_autostart = QAction("开机自动启动", self)
