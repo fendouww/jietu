@@ -77,9 +77,9 @@ class App(QWidget):
             return
         if sys.platform == "darwin":
             msg = (
-                f"{HOTKEY_LABEL}（Option+`）未生效：请在「系统设置 → 隐私与安全性」"
-                "为运行 jietu 的 Python 勾选「辅助功能」和「输入监控」，"
-                "完全退出后重启。Mac 请按 Option 键，不是 Control。"
+                f"{HOTKEY_LABEL}（Option+`）全局占用未生效：请在「系统设置 → 隐私与安全性」"
+                "为运行 jietu 的 Python 同时勾选「输入监控」和「辅助功能」，"
+                "完全退出后重启。需 Option 键（不是 Control）。"
             )
         else:
             msg = f"{HOTKEY_LABEL} 已被其他程序独占，截图请点击托盘图标。"

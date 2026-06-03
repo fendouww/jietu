@@ -1,23 +1,19 @@
 """System-wide global hotkey.
 
-Windows: Win32 RegisterHotKey — exclusive system hotkey.
-macOS: NSApplication (accessory) + NSEvent monitors + HID CGEventTap + pynput.
+Windows: Win32 RegisterHotKey (system-exclusive).
+macOS: HID CGEventTap on the main run loop — intercepts Option+` and returns None
+        so no other app receives the key (true global capture).
 """
 from __future__ import annotations
 import sys
 import time
-import threading
 from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QTimer
 
 _MODS = {
-    "alt":   0x0001,
-    "option": 0x0001,
-    "ctrl":  0x0002,
-    "control": 0x0002,
+    "alt": 0x0001, "option": 0x0001,
+    "ctrl": 0x0002, "control": 0x0002,
     "shift": 0x0004,
-    "win":   0x0008,
-    "super": 0x0008,
-    "cmd":   0x0008,
+    "win": 0x0008, "super": 0x0008, "cmd": 0x0008,
 }
 _MOD_NOREPEAT = 0x4000
 _WM_HOTKEY = 0x0312
@@ -33,7 +29,6 @@ _VK = {
     "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
 }
 
-# Grave / section physical keys on common Mac layouts (incl. many CN ABC keyboards).
 _MAC_GRAVE_KEYCODES = frozenset({50, 10, 33, 41})
 
 _MAC_KEYCODES = {
@@ -48,9 +43,10 @@ _MAC_KEYCODES = {
 }
 
 _DEBOUNCE_SEC = 0.35
+_MAC_TAP_HEALTH_MS = 15_000
 
 HOTKEY_COMBO = "alt+`"
-HOTKEY_LABEL = "Alt+`"   # macOS 键帽为 Option
+HOTKEY_LABEL = "Alt+`"
 
 _mac_appkit_ready = False
 
@@ -78,7 +74,7 @@ def _parse_combo(combo: str) -> tuple[int, int]:
 
 
 def ensure_mac_event_environment() -> bool:
-    """Background tray apps must be NSApplication (accessory) for global hotkeys."""
+    """Tray/background app must be an NSApplication agent."""
     global _mac_appkit_ready
     if sys.platform != "darwin" or _mac_appkit_ready:
         return _mac_appkit_ready
@@ -88,7 +84,6 @@ def ensure_mac_event_environment() -> bool:
         nsapp.setActivationPolicy_(
             AppKit.NSApplicationActivationPolicyAccessory,
         )
-        # Required or addGlobalMonitorForEvents often never fires for agent apps.
         AppKit.NSApp.finishLaunching()
         _mac_appkit_ready = True
         return True
@@ -138,45 +133,6 @@ def _quartz_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> bool
     return (flags & extra) == 0
 
 
-def _nsevent_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> bool:
-    import AppKit
-    flags &= AppKit.NSDeviceIndependentModifierFlagsMask
-    if alt_grave:
-        opt = AppKit.NSEventModifierFlagOption
-        if not (flags & opt):
-            return False
-        if flags & AppKit.NSEventModifierFlagCommand:
-            return False
-        if flags & AppKit.NSEventModifierFlagControl:
-            return False
-        return True
-    if (flags & need_mask) != need_mask:
-        return False
-    optional = (
-        AppKit.NSEventModifierFlagControl
-        | AppKit.NSEventModifierFlagCommand
-        | AppKit.NSEventModifierFlagShift
-        | AppKit.NSEventModifierFlagOption
-    )
-    required = need_mask & optional
-    extra = optional & ~required
-    return (flags & extra) == 0
-
-
-def _nsevent_flag_mask(mods: int) -> int:
-    import AppKit
-    mask = 0
-    if mods & 0x0002:
-        mask |= AppKit.NSEventModifierFlagControl
-    if mods & 0x0001:
-        mask |= AppKit.NSEventModifierFlagOption
-    if mods & 0x0004:
-        mask |= AppKit.NSEventModifierFlagShift
-    if mods & 0x0008:
-        mask |= AppKit.NSEventModifierFlagCommand
-    return mask
-
-
 class _WinHotkeyFilter(QAbstractNativeEventFilter):
     def __init__(self, hotkey_id: int, callback):
         super().__init__()
@@ -193,68 +149,6 @@ class _WinHotkeyFilter(QAbstractNativeEventFilter):
         return False, 0
 
 
-class _MacPynputAltGrave:
-    """Manual Option+` listener — GlobalHotKeys often misses ` on macOS."""
-
-    def __init__(self, on_fire):
-        self._on_fire = on_fire
-        self._option_down = False
-        self._listener = None
-
-    def start(self) -> bool:
-        try:
-            from pynput import keyboard
-        except Exception:
-            return False
-        opt_keys = set()
-        for name in ("alt", "alt_l", "alt_r", "alt_gr"):
-            k = getattr(keyboard.Key, name, None)
-            if k is not None:
-                opt_keys.add(k)
-
-        def on_press(key):
-            if key in opt_keys:
-                self._option_down = True
-                return
-            if not self._option_down:
-                return
-            if self._is_grave_key(key):
-                self._on_fire()
-
-        def on_release(key):
-            if key in opt_keys:
-                self._option_down = False
-
-        try:
-            self._listener = keyboard.Listener(
-                on_press=on_press, on_release=on_release,
-            )
-            self._listener.daemon = True
-            self._listener.start()
-            return True
-        except Exception:
-            self._listener = None
-            return False
-
-    def stop(self):
-        if self._listener:
-            try:
-                self._listener.stop()
-            except Exception:
-                pass
-            self._listener = None
-
-    @staticmethod
-    def _is_grave_key(key) -> bool:
-        from pynput.keyboard import KeyCode
-        if isinstance(key, KeyCode):
-            if key.char in ("`", "~"):
-                return True
-            if key.vk in (50, 10, 33, 41):
-                return True
-        return False
-
-
 class GlobalHotkey(QObject):
     triggered = pyqtSignal()
 
@@ -266,131 +160,39 @@ class GlobalHotkey(QObject):
         self._alt_grave = _is_alt_grave_combo(combo)
         self._filter = None
         self._listener = None
-        self._mac_pynput: _MacPynputAltGrave | None = None
-        self._mac_loop = None
-        self._mac_monitors: list = []
+        self._mac_tap = None
+        self._mac_tap_source = None
+        self._mac_health: QTimer | None = None
+        self._key_codes: frozenset[int] = frozenset()
+        self._need_mask = 0
         self._registered = False
         self._last_fire = 0.0
-        self._backends: list[str] = []
 
     def _emit_triggered(self):
         now = time.monotonic()
         if now - self._last_fire < _DEBOUNCE_SEC:
             return
         self._last_fire = now
-        QTimer.singleShot(0, self.triggered.emit)
+        self.triggered.emit()
 
     def register(self) -> bool:
         if sys.platform == "darwin":
             ensure_mac_event_environment()
-        if sys.platform == "win32":
+            self._registered = self._register_mac_exclusive()
+        elif sys.platform == "win32":
             self._registered = self._register_win()
-        elif sys.platform == "darwin":
-            ok = False
-            if self._register_mac_nsevent():
-                ok = True
-            if self._register_mac_quartz():
-                ok = True
-            if self._alt_grave and self._register_mac_pynput_alt_grave():
-                ok = True
-            elif self._register_pynput():
-                ok = True
-            self._registered = ok
         else:
             self._registered = self._register_pynput()
         return self._registered
 
-    def backends(self) -> str:
-        return ", ".join(self._backends) if self._backends else "none"
-
     def unregister(self):
         if sys.platform == "win32":
             self._unregister_win()
-        if self._mac_monitors:
-            try:
-                import AppKit
-                for m in self._mac_monitors:
-                    AppKit.NSEvent.removeMonitor_(m)
-            except Exception:
-                pass
-            self._mac_monitors.clear()
-        if self._mac_loop is not None:
-            try:
-                import Quartz
-                Quartz.CFRunLoopStop(self._mac_loop)
-            except Exception:
-                pass
-            self._mac_loop = None
-        if self._mac_pynput:
-            self._mac_pynput.stop()
-            self._mac_pynput = None
-        if self._listener:
-            try:
-                self._listener.stop()
-            except Exception:
-                pass
-            self._listener = None
+        self._teardown_mac_tap()
 
-    def _mac_key_match(self, key_code: int, key_codes: frozenset) -> bool:
-        if key_code in key_codes:
-            return True
-        if self._alt_grave and key_code in _MAC_GRAVE_KEYCODES:
-            return True
-        return False
+    # ── macOS: exclusive HID event tap (consumes the shortcut) ───────────────
 
-    def _register_mac_nsevent(self) -> bool:
-        try:
-            import AppKit
-        except Exception:
-            return False
-        try:
-            mods, vk = _parse_combo(self._combo)
-        except ValueError:
-            return False
-        key_codes = _MAC_KEYCODES.get(vk)
-        if not key_codes:
-            return False
-        need_mask = _nsevent_flag_mask(mods & 0x000F)
-
-        def on_key(event):
-            try:
-                if not self._mac_key_match(event.keyCode(), key_codes):
-                    return
-                if not _nsevent_modifiers_ok(
-                    event.modifierFlags(), need_mask,
-                    alt_grave=self._alt_grave,
-                ):
-                    return
-                self._emit_triggered()
-            except Exception:
-                pass
-
-        def global_handler(event):
-            on_key(event)
-
-        def local_handler(event):
-            on_key(event)
-            return event
-
-        try:
-            mask = AppKit.NSEventMaskKeyDown
-            global_m = AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-                mask, global_handler,
-            )
-            if global_m is None:
-                return False
-            self._mac_monitors.append(global_m)
-            local_m = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-                mask, local_handler,
-            )
-            if local_m is not None:
-                self._mac_monitors.append(local_m)
-            self._backends.append("nsevent")
-            return True
-        except Exception:
-            return False
-
-    def _register_mac_quartz(self) -> bool:
+    def _register_mac_exclusive(self) -> bool:
         try:
             import Quartz
         except Exception:
@@ -402,68 +204,105 @@ class GlobalHotkey(QObject):
         key_codes = _MAC_KEYCODES.get(vk)
         if not key_codes:
             return False
-        need_mask = _mac_flag_mask(mods & 0x000F)
-        ready = threading.Event()
-        tap_ok = [False]
+        self._key_codes = key_codes
+        self._need_mask = _mac_flag_mask(mods & 0x000F)
+
+        mask = (
+            Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
+            | Quartz.CGEventMaskBit(Quartz.kCGEventTapDisabledByTimeout)
+            | Quartz.CGEventMaskBit(Quartz.kCGEventTapDisabledByUserInput)
+        )
 
         def callback(proxy, type_, event, refcon):
             try:
+                if type_ in (
+                    Quartz.kCGEventTapDisabledByTimeout,
+                    Quartz.kCGEventTapDisabledByUserInput,
+                ):
+                    if self._mac_tap is not None:
+                        Quartz.CGEventTapEnable(self._mac_tap, True)
+                    return event
                 if type_ != Quartz.kCGEventKeyDown:
                     return event
                 flags = Quartz.CGEventGetFlags(event)
                 kc = Quartz.CGEventGetIntegerValueField(
-                    event, Quartz.kCGKeyboardEventKeycode)
-                if not self._mac_key_match(kc, key_codes):
+                    event, Quartz.kCGKeyboardEventKeycode,
+                )
+                if not self._key_match(kc):
                     return event
                 if not _quartz_modifiers_ok(
-                    flags, need_mask, alt_grave=self._alt_grave,
+                    flags, self._need_mask, alt_grave=self._alt_grave,
                 ):
                     return event
                 self._emit_triggered()
+                return None   # consume — other apps never see Option+`
+            except Exception:
+                return event
+
+        tap = Quartz.CGEventTapCreate(
+            Quartz.kCGHIDEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionDefault,
+            mask,
+            callback,
+            None,
+        )
+        if tap is None:
+            return False
+
+        self._mac_tap = tap
+        src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+        self._mac_tap_source = src
+        Quartz.CFRunLoopAddSource(
+            Quartz.CFRunLoopGetMain(),
+            src,
+            Quartz.kCFRunLoopCommonModes,
+        )
+        Quartz.CGEventTapEnable(tap, True)
+        if not Quartz.CGEventTapIsEnabled(tap):
+            self._teardown_mac_tap()
+            return False
+
+        self._mac_health = QTimer(self)
+        self._mac_health.timeout.connect(self._mac_tap_health)
+        self._mac_health.start(_MAC_TAP_HEALTH_MS)
+        return True
+
+    def _key_match(self, key_code: int) -> bool:
+        if key_code in self._key_codes:
+            return True
+        return self._alt_grave and key_code in _MAC_GRAVE_KEYCODES
+
+    def _mac_tap_health(self):
+        if self._mac_tap is None:
+            return
+        try:
+            import Quartz
+            if not Quartz.CGEventTapIsEnabled(self._mac_tap):
+                Quartz.CGEventTapEnable(self._mac_tap, True)
+        except Exception:
+            pass
+
+    def _teardown_mac_tap(self):
+        if self._mac_health is not None:
+            self._mac_health.stop()
+            self._mac_health = None
+        if self._mac_tap is not None:
+            try:
+                import Quartz
+                Quartz.CGEventTapEnable(self._mac_tap, False)
+                if self._mac_tap_source is not None:
+                    Quartz.CFRunLoopRemoveSource(
+                        Quartz.CFRunLoopGetMain(),
+                        self._mac_tap_source,
+                        Quartz.kCFRunLoopCommonModes,
+                    )
             except Exception:
                 pass
-            return event
+        self._mac_tap = None
+        self._mac_tap_source = None
 
-        def run():
-            mask = Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown)
-            tap = None
-            for location in (
-                Quartz.kCGHIDEventTap,
-                Quartz.kCGSessionEventTap,
-            ):
-                tap = Quartz.CGEventTapCreate(
-                    location,
-                    Quartz.kCGHeadInsertEventTap,
-                    Quartz.kCGEventTapOptionListenOnly,
-                    mask, callback, None,
-                )
-                if tap:
-                    break
-            if not tap:
-                ready.set()
-                return
-            tap_ok[0] = True
-            src = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
-            self._mac_loop = Quartz.CFRunLoopGetCurrent()
-            Quartz.CFRunLoopAddSource(
-                self._mac_loop, src, Quartz.kCFRunLoopCommonModes)
-            Quartz.CGEventTapEnable(tap, True)
-            ready.set()
-            Quartz.CFRunLoopRun()
-
-        threading.Thread(target=run, daemon=True).start()
-        ready.wait(timeout=2.0)
-        if tap_ok[0]:
-            self._backends.append("quartz")
-        return tap_ok[0]
-
-    def _register_mac_pynput_alt_grave(self) -> bool:
-        self._mac_pynput = _MacPynputAltGrave(self._emit_triggered)
-        if self._mac_pynput.start():
-            self._backends.append("pynput-alt")
-            return True
-        self._mac_pynput = None
-        return False
+    # ── Windows ───────────────────────────────────────────────────────────────
 
     def _register_win(self) -> bool:
         import ctypes
@@ -490,6 +329,8 @@ class GlobalHotkey(QObject):
         except Exception:
             pass
 
+    # ── Linux fallback ──────────────────────────────────────────────────────
+
     def _register_pynput(self) -> bool:
         try:
             from pynput import keyboard
@@ -509,7 +350,6 @@ class GlobalHotkey(QObject):
             )
             self._listener.daemon = True
             self._listener.start()
-            self._backends.append("pynput")
             return True
         except Exception:
             self._listener = None
