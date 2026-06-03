@@ -51,13 +51,23 @@ class App(QWidget):
 
         # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
         self._hotkey = GlobalHotkey("alt+`")
-        self._hotkey.triggered.connect(self._start_capture)
+        self._hotkey.triggered.connect(
+            self._start_capture, Qt.ConnectionType.QueuedConnection,
+        )
         if not self._hotkey.register():
+            if sys.platform == "darwin":
+                msg = (
+                    "Alt+` 未生效：请在「系统设置 → 隐私与安全性」中"
+                    "为运行 jietu 的 Python 开启「辅助功能」和「输入监控」，"
+                    "然后完全退出并重启 jietu。"
+                )
+            else:
+                msg = "Alt+` 已被其他程序独占，截图请点击托盘图标。"
             self._tray.showMessage(
-                "快捷键被占用",
-                "Alt+` 已被其他程序独占，截图请点击托盘图标。",
+                "快捷键未就绪",
+                msg,
                 QSystemTrayIcon.MessageIcon.Warning,
-                5000,
+                8000,
             )
 
         self._updater.check_async(force=True)
