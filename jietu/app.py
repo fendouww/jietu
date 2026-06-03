@@ -2,12 +2,14 @@
 import sys
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication, QWidget
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QColor, QPainter
-from PyQt6.QtCore import Qt, QRect
+from PyQt6.QtCore import Qt, QRect, QTimer
 
 from jietu.capture import CaptureOverlay
 from jietu.viewer import PinnedViewer
 from jietu.updater import UpdateChecker
-from jietu.hotkey import GlobalHotkey, HOTKEY_COMBO, HOTKEY_LABEL
+from jietu.hotkey import (
+    GlobalHotkey, HOTKEY_COMBO, HOTKEY_LABEL, ensure_mac_event_environment,
+)
 from jietu import translator
 from jietu import upgrade
 import jietu.startup as startup
@@ -49,26 +51,12 @@ class App(QWidget):
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
-        # System-wide EXCLUSIVE hotkey (Win32 RegisterHotKey). QShortcut would NOT work.
+        # System-wide hotkey — register after the event loop starts (macOS needs this).
         self._hotkey = GlobalHotkey(HOTKEY_COMBO)
         self._hotkey.triggered.connect(
             self._start_capture, Qt.ConnectionType.QueuedConnection,
         )
-        if not self._hotkey.register():
-            if sys.platform == "darwin":
-                msg = (
-                    f"{HOTKEY_LABEL} 未生效：请在「系统设置 → 隐私与安全性」中"
-                    "为运行 jietu 的 Python 开启「辅助功能」和「输入监控」，"
-                    "然后完全退出并重启 jietu。"
-                )
-            else:
-                msg = f"{HOTKEY_LABEL} 已被其他程序独占，截图请点击托盘图标。"
-            self._tray.showMessage(
-                "快捷键未就绪",
-                msg,
-                QSystemTrayIcon.MessageIcon.Warning,
-                8000,
-            )
+        QTimer.singleShot(0, self._register_hotkey)
 
         self._updater.check_async(force=True)
         self._updater.start_periodic_checks()
@@ -81,6 +69,26 @@ class App(QWidget):
 
     def show(self):
         pass
+
+    def _register_hotkey(self):
+        if sys.platform == "darwin":
+            ensure_mac_event_environment()
+        if self._hotkey.register():
+            return
+        if sys.platform == "darwin":
+            msg = (
+                f"{HOTKEY_LABEL}（Option+`）未生效：请在「系统设置 → 隐私与安全性」"
+                "为运行 jietu 的 Python 勾选「辅助功能」和「输入监控」，"
+                "完全退出后重启。Mac 请按 Option 键，不是 Control。"
+            )
+        else:
+            msg = f"{HOTKEY_LABEL} 已被其他程序独占，截图请点击托盘图标。"
+        self._tray.showMessage(
+            "快捷键未就绪",
+            msg,
+            QSystemTrayIcon.MessageIcon.Warning,
+            10000,
+        )
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()

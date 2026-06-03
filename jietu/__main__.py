@@ -33,6 +33,9 @@ def _enable_hidpi():
 
 def main():
     _enable_hidpi()
+    if sys.platform == "darwin":
+        from jietu.hotkey import ensure_mac_event_environment
+        ensure_mac_event_environment()
     # --child flag: launched by watchdog, use clean exit code on intentional quit
     is_child = "--child" in sys.argv
 

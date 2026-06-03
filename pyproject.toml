@@ -21,6 +21,7 @@ dependencies = [
     #           Intel-Mac / py3.13 wheels)
     "easyocr>=1.7; platform_system != 'Darwin'",
     "ocrmac>=0.9; platform_system == 'Darwin'",
+    "pyobjc-framework-Cocoa>=10.0; platform_system == 'Darwin'",
 ]
 
 [project.scripts]
