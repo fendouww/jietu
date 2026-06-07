@@ -57,6 +57,10 @@ class App(QWidget):
             self._start_capture, Qt.ConnectionType.QueuedConnection,
         )
         QTimer.singleShot(0, self._register_hotkey)
+        # Re-register when app regains focus (macOS may drop event taps while idle).
+        app = QApplication.instance()
+        if app is not None:
+            app.applicationStateChanged.connect(self._on_app_state_changed)
 
         self._updater.check_async(force=True)
         self._updater.start_periodic_checks()
@@ -73,25 +77,29 @@ class App(QWidget):
     def _register_hotkey(self):
         if sys.platform == "darwin":
             ensure_mac_event_environment()
+        self._hotkey.unregister()
         if self._hotkey.register():
             return
         if sys.platform == "darwin":
             msg = (
-                f"{HOTKEY_LABEL}（Option+`）全局占用未生效：请在「系统设置 → 隐私与安全性」"
-                "为运行 jietu 的 Python 同时勾选「输入监控」和「辅助功能」，"
-                "完全退出后重启。需 Option 键（不是 Control）。"
+                f"{HOTKEY_LABEL}（Option+`）未就绪：请在「系统设置 → 隐私与安全性」"
+                "为 Python 勾选「输入监控」和「辅助功能」后完全退出并重启。"
             )
         else:
             msg = (
-                f"{HOTKEY_LABEL} 全局占用未生效，请完全退出后以管理员身份重试，"
-                "或点击托盘图标截图。"
+                f"{HOTKEY_LABEL} 未就绪，可点击托盘图标截图；"
+                "若需全局快捷键请重启 jietu。"
             )
         self._tray.showMessage(
             "快捷键未就绪",
             msg,
             QSystemTrayIcon.MessageIcon.Warning,
-            10000,
+            8000,
         )
+
+    def _on_app_state_changed(self, state):
+        if state == Qt.ApplicationState.ApplicationActive:
+            QTimer.singleShot(200, self._register_hotkey)
 
     def _build_menu(self) -> QMenu:
         menu = QMenu()
