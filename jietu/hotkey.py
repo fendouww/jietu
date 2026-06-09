@@ -46,9 +46,8 @@ _MAC_KEYCODES = {
 _DEBOUNCE_SEC = 0.35
 _HEALTH_MS = 2500
 
-# Uncommon default — rarely taken by other apps (Win/Mac/Linux).
-HOTKEY_COMBO = "ctrl+shift+f11"
-HOTKEY_LABEL = "Ctrl+Shift+F11"
+HOTKEY_COMBO = "ctrl+`"
+HOTKEY_LABEL = "Ctrl+`"
 
 _mac_appkit_ready = False
 
@@ -105,6 +104,11 @@ def ensure_mac_event_environment() -> bool:
 def _is_alt_grave_combo(combo: str) -> bool:
     parts = {p.strip().lower() for p in combo.split("+")}
     return ("alt" in parts or "option" in parts) and ("`" in parts or "~" in parts)
+
+
+def _is_ctrl_grave_combo(combo: str) -> bool:
+    parts = {p.strip().lower() for p in combo.split("+")}
+    return ("ctrl" in parts or "control" in parts) and "`" in parts
 
 
 def _mac_flag_mask(mods: int) -> int:
@@ -228,6 +232,7 @@ class GlobalHotkey(QObject):
         super().__init__()
         self._combo = combo
         self._alt_grave = _is_alt_grave_combo(combo)
+        self._ctrl_grave = _is_ctrl_grave_combo(combo)
         self._listener = None
         self._win_hook = None
         self._hook_proc_ref = None
@@ -281,8 +286,9 @@ class GlobalHotkey(QObject):
             return False
         if sys.platform == "darwin":
             ensure_mac_event_environment()
-            ok = self._register_mac_nsevent()
-            ok = self._register_mac_tap() or ok
+            # HID tap consumes the key globally; NSEvent is backup only.
+            ok = self._register_mac_tap()
+            ok = self._register_mac_nsevent() or ok
             self._registered = ok
         elif sys.platform == "win32":
             self._registered = self._register_win_all()
@@ -353,7 +359,10 @@ class GlobalHotkey(QObject):
     def _key_match(self, key_code: int) -> bool:
         if key_code in self._key_codes:
             return True
-        return self._alt_grave and key_code in _MAC_GRAVE_KEYCODES
+        return (
+            (self._alt_grave or self._ctrl_grave)
+            and key_code in _MAC_GRAVE_KEYCODES
+        )
 
     def _on_mac_hotkey(self):
         self._emit_triggered()
@@ -385,7 +394,17 @@ class GlobalHotkey(QObject):
             on_key(event)
 
         def local_handler(event):
-            on_key(event)
+            try:
+                if hotkey_self._key_match(event.keyCode()):
+                    if _nsevent_modifiers_ok(
+                        event.modifierFlags(),
+                        hotkey_self._nsevent_need_mask,
+                        alt_grave=hotkey_self._alt_grave,
+                    ):
+                        hotkey_self._on_mac_hotkey()
+                        return None
+            except Exception:
+                pass
             return event
 
         try:
