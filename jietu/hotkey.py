@@ -46,8 +46,9 @@ _MAC_KEYCODES = {
 _DEBOUNCE_SEC = 0.35
 _HEALTH_MS = 2500
 
-HOTKEY_COMBO = "~"
-HOTKEY_LABEL = "~"
+# Uncommon default — rarely taken by other apps (Win/Mac/Linux).
+HOTKEY_COMBO = "ctrl+shift+f11"
+HOTKEY_LABEL = "Ctrl+Shift+F11"
 
 _mac_appkit_ready = False
 
