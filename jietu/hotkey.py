@@ -46,8 +46,8 @@ _MAC_KEYCODES = {
 _DEBOUNCE_SEC = 0.35
 _HEALTH_MS = 2500
 
-HOTKEY_COMBO = "alt+`"
-HOTKEY_LABEL = "Alt+`"
+HOTKEY_COMBO = "alt+~"
+HOTKEY_LABEL = "Alt+~"
 
 _mac_appkit_ready = False
 
@@ -67,6 +67,9 @@ def _parse_combo(combo: str) -> tuple[int, int]:
             vk = ord(tok)
         elif tok in _VK:
             vk = _VK[tok]
+            # ~ is Shift+` on the same physical key.
+            if tok == "~":
+                mods |= _MODS["shift"]
         else:
             raise ValueError(f"unknown key token: {tok!r}")
     if vk is None:
@@ -126,6 +129,10 @@ def _quartz_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> bool
             return False
         if flags & Quartz.kCGEventFlagMaskControl:
             return False
+        need_shift = bool(need_mask & Quartz.kCGEventFlagMaskShift)
+        has_shift = bool(flags & Quartz.kCGEventFlagMaskShift)
+        if need_shift != has_shift:
+            return False
         return True
     if (flags & need_mask) != need_mask:
         return False
@@ -150,6 +157,10 @@ def _nsevent_modifiers_ok(flags: int, need_mask: int, *, alt_grave: bool) -> boo
         if flags & AppKit.NSEventModifierFlagCommand:
             return False
         if flags & AppKit.NSEventModifierFlagControl:
+            return False
+        need_shift = bool(need_mask & AppKit.NSEventModifierFlagShift)
+        has_shift = bool(flags & AppKit.NSEventModifierFlagShift)
+        if need_shift != has_shift:
             return False
         return True
     if (flags & need_mask) != need_mask:
@@ -639,6 +650,8 @@ class GlobalHotkey(QObject):
             tok = raw.strip().lower()
             if tok in _MODS:
                 parts.append("<alt>" if tok in ("alt", "option") else f"<{tok}>")
+            elif tok == "~":
+                parts.extend(["<shift>", "`"])
             else:
                 parts.append(tok)
         combo = "+".join(parts)
