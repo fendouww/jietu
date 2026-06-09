@@ -82,7 +82,7 @@ class App(QWidget):
             return
         if sys.platform == "darwin":
             msg = (
-                f"{HOTKEY_LABEL}（Option+Shift+`）未就绪：请在「系统设置 → 隐私与安全性」"
+                f"快捷键 {HOTKEY_LABEL} 未就绪：请在「系统设置 → 隐私与安全性」"
                 "为 Python 勾选「输入监控」和「辅助功能」后完全退出并重启。"
             )
         else:

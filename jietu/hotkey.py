@@ -46,8 +46,8 @@ _MAC_KEYCODES = {
 _DEBOUNCE_SEC = 0.35
 _HEALTH_MS = 2500
 
-HOTKEY_COMBO = "alt+~"
-HOTKEY_LABEL = "Alt+~"
+HOTKEY_COMBO = "~"
+HOTKEY_LABEL = "~"
 
 _mac_appkit_ready = False
 
